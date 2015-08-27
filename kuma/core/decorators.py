@@ -1,6 +1,7 @@
 from functools import wraps
 import inspect
 
+from django.conf import settings
 from django.contrib.auth import REDIRECT_FIELD_NAME
 from django.contrib.auth.decorators import user_passes_test
 from django.core.exceptions import PermissionDenied
@@ -136,3 +137,17 @@ def is_superuser(u):
 
 superuser_required = user_passes_test(is_superuser)
 #: A decorator to use for requiring a superuser
+
+
+def block_user_agents(view_func):
+    blockable_user_agents = []
+    if hasattr(settings, 'BLOCKABLE_USER_AGENTS'):
+        blockable_user_agents = settings.BLOCKABLE_USER_AGENTS
+
+    def agent_blocked_view(request, *args, **kwargs):
+        if 'HTTP_USER_AGENT' in request.META:
+            for user_agent_regex in blockable_user_agents:
+                if user_agent_regex.search(request.META['HTTP_USER_AGENT']):
+                    return HttpResponseForbidden()
+        return view_func(request, *args, **kwargs)
+    return agent_blocked_view

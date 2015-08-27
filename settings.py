@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import platform
+import re
 
 from django.utils.functional import lazy
 from django.utils.translation import ugettext_lazy as _
@@ -1187,6 +1188,15 @@ PERSONA_VERIFIER_URL = 'https://verifier.login.persona.org/verify'
 PERSONA_INCLUDE_URL = 'https://login.persona.org/include.js'
 
 HONEYPOT_FIELD_NAME = 'website'
+
+BLOCKABLE_USER_AGENTS = (
+    re.compile("Yahoo! Slurp"),
+    re.compile("Googlebot"),
+    re.compile("bingbot"),
+    re.compile("Applebot"),
+    re.compile("wget"),
+    re.compile("curl"),
+)
 
 # TODO: Once using DRF more we need to make that exception handler more generic
 REST_FRAMEWORK = {
