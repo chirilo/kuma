@@ -1,25 +1,22 @@
 import logging
 
-import elasticsearch
-from rest_framework import status
-from rest_framework.response import Response
-from rest_framework.views import exception_handler
-from tower import ugettext_lazy as _
+from django.utils.translation import gettext_lazy as _
 from urlobject import URLObject
 
 
-log = logging.getLogger('kuma.search.utils')
+log = logging.getLogger("kuma.search.utils")
 
 
-SEARCH_DOWN_DETAIL = _('Search is temporarily unavailable. '
-                       'Please try again in a few minutes.')
+SEARCH_DOWN_DETAIL = _(
+    "Search is temporarily unavailable. " "Please try again in a few minutes."
+)
 
-SEARCH_ERROR_DETAIL = _('Something went wrong with the search query. '
-                        'Please try again in a few minutes.')
+SEARCH_ERROR_DETAIL = _(
+    "Something went wrong with the search query. " "Please try again in a few minutes."
+)
 
 
 class QueryURLObject(URLObject):
-
     def pop_query_param(self, name, value):
         """
         Removes the parameter with the given name and value -- if it exists.
@@ -32,8 +29,7 @@ class QueryURLObject(URLObject):
                         params.setdefault(param, []).append(default)
             else:
                 params[param] = defaults
-        return (self.del_query_param(name)
-                    .set_query_params(self.clean_params(params)))
+        return self.del_query_param(name).set_query_params(self.clean_params(params))
 
     def merge_query_param(self, name, value):
         """
@@ -59,33 +55,12 @@ class QueryURLObject(URLObject):
         for param, default in params.items():
             if isinstance(default, (list, tuple)):
                 # set all items with an empty value to an empty string
-                default = [item or '' for item in default]
+                default = [item or "" for item in default]
                 if len(default) == 1:
                     default = default[0]
-            if isinstance(default, basestring):
+            if isinstance(default, str):
                 default = default.strip()
             # make sure the parameter name and value aren't empty
             if param and default:
                 clean_params[param] = default
         return clean_params
-
-
-def search_exception_handler(exc):
-    # Call REST framework's default exception handler first,
-    # to get the standard error response.
-    response = exception_handler(exc)
-
-    if response is None:
-        if isinstance(exc, elasticsearch.ElasticsearchException):
-            # FIXME: This really should return a 503 error instead but Zeus
-            # doesn't let that through and displays a generic error page in that
-            # case which we don't want here
-            log.error('Elasticsearch exception: %s' % exc)
-            return Response({'detail': SEARCH_DOWN_DETAIL},
-                            status=status.HTTP_200_OK)
-        elif isinstance(exc, UnicodeDecodeError):
-            log.error('UnicodeDecodeError exception: %s' % exc)
-            return Response({'detail': SEARCH_ERROR_DETAIL},
-                            status=status.HTTP_404_NOT_FOUND)
-
-    return response

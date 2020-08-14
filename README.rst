@@ -2,21 +2,23 @@
 Kuma
 ====
 
-.. image:: https://travis-ci.org/mozilla/kuma.svg?branch=master
-   :target: https://travis-ci.org/mozilla/kuma
+.. image:: https://travis-ci.com/mdn/kuma.svg?branch=master
+   :target: https://travis-ci.com/mdn/kuma
    :alt: Build Status
 
-.. image:: https://codecov.io/github/mozilla/kuma/coverage.svg?branch=master
-   :target: https://codecov.io/github/mozilla/kuma?branch=master
+.. image:: https://codecov.io/github/mdn/kuma/coverage.svg?branch=master
+   :target: https://codecov.io/github/mdn/kuma?branch=master
    :alt: Code Coverage Status
 
-.. image:: https://requires.io/github/mozilla/kuma/requirements.svg?branch=master
-   :target: https://requires.io/github/mozilla/kuma/requirements/?branch=master
-   :alt: Requirements Status
-   
 .. image:: http://img.shields.io/badge/license-MPL2-blue.svg
-   :target: https://raw.githubusercontent.com/mozilla/kuma/master/LICENSE
+   :target: https://raw.githubusercontent.com/mdn/kuma/master/LICENSE
    :alt: License
+
+.. image:: https://img.shields.io/badge/whatsdeployed-stage,prod-green.svg
+   :target: https://whatsdeployed.io/s/HC0/mdn/kuma
+   :alt: What's deployed on stage,prod?
+
+.. Omit badges from docs
 
 Kuma is the platform that powers `MDN (developer.mozilla.org)
 <https://developer.mozilla.org>`_
@@ -24,31 +26,36 @@ Kuma is the platform that powers `MDN (developer.mozilla.org)
 Development
 ===========
 
-:Code:          https://github.com/mozilla/kuma
+:Code:          https://github.com/mdn/kuma
+:Issues:        `P1 Bugs`_ (to be fixed in current or next sprint_)
 
-:Issues:        http://mzl.la/mdn_backlog (Product)
-                https://prs.paas.allizom.org/mozilla:kuma,kuma-lib,kumascript,mozhacks (PR Queue)
+                `P2 Bugs`_ (to be fixed in 180 days)
 
-:Dev Docs:      https://kuma.readthedocs.org/en/latest/installation.html
+                `All developer.mozilla.org bugs`_
 
-:CI Server:     https://travis-ci.org/mozilla/kuma
+                `Pull Request Queues`_
+:Dev Docs:      https://kuma.readthedocs.io/en/latest/installation.html
+:CI Server:     https://travis-ci.com/mdn/kuma
+:Forum:         https://discourse.mozilla.org/c/mdn
+:Matrix:        `#mdn room`_
+:Servers:       `What's Deployed on MDN?`_
 
-:Mailing list:  https://lists.mozilla.org/listinfo/dev-mdn
-
-:IRC:           irc://irc.mozilla.org/mdndev
-                http://logs.glob.uno/?c=mozilla%23mdndev (logs)
-
-:Servers:       http://mzl.la/whats-deployed (What's Deployed)
                 https://developer.allizom.org/ (stage)
+
                 https://developer.mozilla.org/ (prod)
 
-Getting Started
+.. _`P1 Bugs`: https://github.com/mdn/kuma/issues?q=is%3Aopen+is%3Aissue+label%3Ap1
+.. _`P2 Bugs`: https://github.com/mdn/kuma/issues?q=is%3Aopen+is%3Aissue+label%3Ap2
+.. _`All developer.mozilla.org bugs`: https://mzl.la/2onLvZ8
+.. _`Pull Request Queues`: http://prs.mozilla.io/mdn:kuma,kumascript,infra,mdn-fiori
+.. _`What's Deployed on MDN?`: https://whatsdeployed.io/s/HC0/mdn/kuma
+.. _sprint: https://wiki.mozilla.org/Engagement/MDN_Durable_Team/Processes#Planning_Sprints
+.. _`#mdn room`: https://chat.mozilla.org/#/room/#mdn:mozilla.org
+
+
+Getting started
 ===============
 
-Want to help make MDN great? Here are some options:
-
-1. Contribute to `our selenium test suite
-   <https://github.com/mozilla/kuma/tree/master/tests/ui>`_
-2. Contribute to the platform itself. Our `contribution guide
-   <CONTRIBUTING.md>`_ lists some good first projects and offers direction on
-   submitting code.
+Want to help make MDN great? Our `contribution guide
+<https://github.com/mdn/kuma/blob/master/CONTRIBUTING.md>`_ lists some good
+first projects and offers direction on submitting code.

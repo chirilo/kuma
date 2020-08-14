@@ -1,45 +1,47 @@
-# -*- coding: utf-8 -*-
-import re
-
+from django.conf import settings
 from django.core.exceptions import PermissionDenied
 from django.shortcuts import get_object_or_404, redirect, render
+from django.views.decorators.cache import cache_control
 from django.views.decorators.clickjacking import xframe_options_exempt
 from django.views.decorators.http import require_GET
 
-from constance import config
-
 from kuma.attachments.utils import full_attachment_url
-from ..decorators import process_document_path, allow_CORS_GET
+
+from ..decorators import allow_CORS_GET, process_document_path
+from ..jobs import DocumentCodeSampleJob
 from ..models import Document
 
 
+@cache_control(public=True, max_age=60 * 60 * 24)
 @require_GET
 @allow_CORS_GET
 @xframe_options_exempt
 @process_document_path
-def code_sample(request, document_slug, document_locale, sample_id):
+def code_sample(request, document_slug, document_locale, sample_name):
     """
     Extract a code sample from a document and render it as a standalone
     HTML document
     """
     # Restrict rendering of live code samples to specified hosts
-    if not re.search(config.KUMA_WIKI_IFRAME_ALLOWED_HOSTS,
-                     request.build_absolute_uri()):
+    if request.get_host() not in (settings.ATTACHMENT_HOST, settings.ATTACHMENT_ORIGIN):
         raise PermissionDenied
 
-    document = get_object_or_404(Document, slug=document_slug,
-                                 locale=document_locale)
-    data = document.extract_code_sample(sample_id)
-    data['document'] = document
-    return render(request, 'wiki/code_sample.html', data)
+    document = get_object_or_404(Document, slug=document_slug, locale=document_locale)
+    job = DocumentCodeSampleJob(generation_args=[document.pk])
+    data = job.get(document.pk, sample_name)
+    data["document"] = document
+    data["sample_name"] = sample_name
+    return render(request, "wiki/code_sample.html", data)
 
 
+@cache_control(public=True, max_age=60 * 60 * 24 * 5)
 @require_GET
 @allow_CORS_GET
 @xframe_options_exempt
 @process_document_path
-def raw_code_sample_file(request, document_slug, document_locale,
-                         sample_id, attachment_id, filename):
+def raw_code_sample_file(
+    request, document_slug, document_locale, sample_name, attachment_id, filename
+):
     """
     A view redirecting to the real file serving view of the attachments app.
     This exists so the writers can use relative paths to files in the

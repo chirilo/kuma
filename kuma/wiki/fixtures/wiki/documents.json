@@ -3,12 +3,10 @@
         "pk": 1,
         "model": "wiki.document",
         "fields": {
-            "category": 10,
             "title": "an article title",
             "locale": "en-US",
             "current_revision": 21,
             "modified": "2013-06-06 05:54:18",
-            "is_template": false,
             "html": "<p>the keyword video only appears in the body of this article\n</p>",
             "slug": "article-title"
         }
@@ -17,12 +15,10 @@
         "pk": 2,
         "model": "wiki.document",
         "fields": {
-            "category": 10,
             "title": "an article title 2",
             "locale": "en-US",
             "current_revision": 23,
             "modified": "2013-06-06 05:54:18",
-            "is_template": false,
             "html": "<p>the keyword cupcake only appears in the body of this article\n</p>",
             "slug": "article-title-2"
         }
@@ -31,10 +27,8 @@
         "pk": 3,
         "model": "wiki.document",
         "fields": {
-            "category": 10,
             "title": "an article title 3",
             "locale": "en-US",
-            "is_template": false,
             "modified": "2013-06-06 05:54:18",
             "html": "<p>A CSS article</p>",
             "slug": "CSS/article-title-3"
@@ -44,13 +38,11 @@
         "pk": 4,
         "model": "wiki.document",
         "fields": {
-            "category": 10,
             "parent": 1,
             "title": "le title",
             "locale": "fr",
             "current_revision": 19,
             "modified": "2013-06-06 05:54:18",
-            "is_template": false,
             "html": "<p>ceci n'est pas une pipe\n</p><p>mon dieu!\n</p>",
             "slug": "le-title"
         }
@@ -59,13 +51,11 @@
         "pk": 5,
         "model": "wiki.document",
         "fields": {
-            "category": 10,
             "parent": null,
             "title": "lorem ipsum",
             "locale": "en-US",
             "modified": "2013-06-06 05:54:18",
             "current_revision": 22,
-            "is_template": false,
             "rendered_html": "<p>audio is in this <strong>but the word for tough things</strong> will be ignored\n</p>",
             "slug": "lorem-ipsum"
         }
@@ -74,10 +64,8 @@
         "pk": 6,
         "model": "wiki.document",
         "fields": {
-            "category": 10,
             "title": "Article with revisions",
             "locale": "en-US",
-            "is_template": false,
             "modified": "2013-06-06 05:54:18",
             "html": "",
             "slug": "article-with-revisions"
@@ -87,10 +75,8 @@
         "pk": 7,
         "model": "wiki.document",
         "fields": {
-            "category": 10,
             "title": "User:jezdez",
             "locale": "en-US",
-            "is_template": false,
             "modified": "2014-01-27 18:12:10",
             "html": "",
             "slug": "User:jezdez"
@@ -100,12 +86,10 @@
         "pk": 8,
         "model": "wiki.document",
         "fields": {
-            "category": 10,
             "title": "getElementByID",
             "locale": "en-US",
             "current_revision": 21,
             "modified": "2013-06-06 05:54:18",
-            "is_template": false,
             "html": "<p>words that are not in the title</p>",
             "slug": "camel-case-test"
         }
@@ -261,6 +245,20 @@
         }
     },
     {
+        "pk": 30,
+        "model": "wiki.revision",
+        "fields": {
+            "title": "Seventh revision of the article.",
+            "is_approved": true,
+            "created": "2013-08-15 09:30:00",
+            "summary": "Seventh revision of the article.",
+            "content": "Seventh revision of the article.",
+            "keywords": "",
+            "document": 6,
+            "creator": 10,
+            "slug": "article-with-revisions"
+        }
+    },    {
         "pk": 100,
         "model": "wiki.documenttag",
         "fields": {

@@ -3,11 +3,9 @@
         "pk": 1,
         "model": "wiki.document",
         "fields": {
-            "category": 10,
             "title": "an article title",
             "locale": "en-US",
             "current_revision": 21,
-            "is_template": false,
             "html": "<p>the keyword video only appears in the body of this article\n</p>",
             "slug": "article-title"
         }
@@ -16,11 +14,9 @@
         "pk": 2,
         "model": "wiki.document",
         "fields": {
-            "category": 30,
             "title": "japanese article",
             "locale": "ja",
             "current_revision": 14,
-            "is_template": false,
             "html": "<p>\u30d8\u30eb\u30d7\u3068\u30c1\u30e5\u30fc\u30c8\u30ea\u30a2\u30eb\u4eba\u6c17\u306e\u30b5\u30dd\u30fc\u30c8\u8a18\u4e8b\n</p>",
             "slug": "japanese-article"
         }
@@ -29,12 +25,10 @@
         "pk": 3,
         "model": "wiki.document",
         "fields": {
-            "category": 10,
             "parent": 1,
             "title": "spanish article",
             "locale": "es",
             "current_revision": 15,
-            "is_template": false,
             "html": "<p>spanish content goes here\n</p>",
             "slug": "spanish-article"
         }
@@ -43,12 +37,10 @@
         "pk": 4,
         "model": "wiki.document",
         "fields": {
-            "category": 10,
             "parent": 1,
             "title": "le title",
             "locale": "fr",
             "current_revision": 19,
-            "is_template": false,
             "html": "<p>ceci n'est pas une pipe\n</p><p>mon dieu! fa\u00e7on\n</p>",
             "slug": "le-title"
         }
@@ -57,12 +49,10 @@
         "pk": 5,
         "model": "wiki.document",
         "fields": {
-            "category": 10,
             "parent": null,
             "title": "lorem ipsum",
             "locale": "en-US",
             "current_revision": 22,
-            "is_template": false,
             "html": "<p>audio is in this <strong>but the word for tough things</strong> will be ignored\n</p>",
             "slug": "lorem-ipsum"
         }
@@ -71,12 +61,10 @@
         "pk": 6,
         "model": "wiki.document",
         "fields": {
-            "category": 11,
             "parent": null,
             "title": "redirect lorem ipsum",
             "locale": "en-US",
             "current_revision": 30,
-            "is_template": false,
             "html": "REDIRECT <a href=\"/foo\">bar</a>",
             "slug": "redirect-lorem-ipsum"
         }

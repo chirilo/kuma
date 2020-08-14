@@ -1,22 +1,22 @@
 from django.contrib import admin
 
-from .models import Feed, Entry, Bundle
+from .models import Bundle, Entry, Feed
 
 
 class BundleInline(admin.TabularInline):
     model = Bundle.feeds.through
 
 
+@admin.register(Feed)
 class FeedAdmin(admin.ModelAdmin):
     inlines = [BundleInline]
-admin.site.register(Feed, FeedAdmin)
 
 
+@admin.register(Entry)
 class EntryAdmin(admin.ModelAdmin):
     pass
-admin.site.register(Entry, EntryAdmin)
 
 
+@admin.register(Bundle)
 class BundleAdmin(admin.ModelAdmin):
     pass
-admin.site.register(Bundle, BundleAdmin)

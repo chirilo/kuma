@@ -1,457 +1,366 @@
 ============
 Installation
 ============
+Kuma uses `Docker`_ for local development and integration testing, and we are
+transitioning to Docker containers for deployment as well.
 
-Core developers run Kuma in a `Vagrant`_-managed virtual machine so we can run
-the entire MDN stack. (Django, KumaScript, Search, Celery, etc.)
-If you're on Mac OS X or Linux and looking for a quick way to get started, you
-should try these instructions.
+.. _Docker: https://www.docker.com/
 
-.. note:: **If you have problems getting vagrant up**, check Errors_ below.
+**Current Status of Dockerization**:
 
-.. _vagrant: http://vagrantup.com/
-.. _uses NFS to share the current working directory: http://docs.vagrantup.com/v2/synced-folders/nfs.html
+* Kuma developers are using Docker for daily development and maintenance tasks.
+  Staff developers primarily use `Docker for Mac`_. Other staff
+  members and contributors use `Docker's Ubuntu packages`_.
+* The development environment can use a lot of resources. On Docker for Mac,
+  the environment runs well with 6 CPUs and 10 GB of memory dedicated to
+  Docker. It can be run successfully on 2 CPUs and 2 GB of memory.
+* The Docker development environment is evolving rapidly, to address issues
+  found during development and to move toward a containerized design. You may
+  need to regularly reset your environment to get the current changes.
+* The Docker development environment doesn't fully support a 'production-like'
+  environment. For example, we don't have a documented configuration for
+  running with an SSL connection.
+* When the master branch is updated, the ``kuma_base`` image is refreshed and
+  published to `DockerHub`_. This image contains system packages and
+  third-party libraries.
+* Our TravisCI_ builds include a target that build Docker containers and runs
+  the tests inside.
+* Our Jenkins_ server builds and publishes Docker images, and runs integration
+  tests using Docker.
+* We are documenting tips and tricks on the
+  :doc:`Troubleshooting page <troubleshooting>`.
+* Feel free to ask for help on Matrix at ``#mdn`` or on `discourse`_.
 
-Install and run everything
-==========================
+.. _`Docker for Mac`: https://docs.docker.com/docker-for-mac/
+.. _`Docker's Ubuntu packages`: https://docs.docker.com/engine/installation/linux/ubuntulinux/
+.. _`DockerHub`: https://hub.docker.com/r/mdnwebdocs/kuma_base/tags/
+.. _TravisCI: https://travis-ci.com/mdn/kuma/
+.. _Jenkins: https://ci.us-west-2.mdn.mozit.cloud/blue/organizations/jenkins/kuma/activity
+.. _discourse: https://discourse.mozilla.org/c/mdn
 
-#. Install VirtualBox >= 4.2.x from http://www.virtualbox.org/
-
-   .. note:: (Windows) After installing VirtualBox you need to set
-              ``PATH=C:\\Program Files\\Oracle\\VirtualBox\\VBoxManage.exe;``
-
-#. Install vagrant >= 1.7 using the installer from `vagrantup.com <http://vagrantup.com/>`_
-
-#. Install `Ansible <http://docs.ansible.com/>`_ on your machine so that
-   Vagrant is able to set up the VM the way we need it.
-
-   See the `Ansible Installation docs <http://docs.ansible.com/intro_installation.html>`_
-   for which way to use on your computer's platform.
-
-   The most common platforms:
-
-   Mac OS X::
-
-       brew install ansible
-
-   or if you have a globally installed pip::
-
-       sudo pip install ansible
-
-   Ubuntu::
-
-       $ sudo apt-get install software-properties-common
-       $ sudo apt-add-repository ppa:ansible/ansible
-       $ sudo apt-get update
-       $ sudo apt-get install ansible
-
-   Fedora / RPM-based distribution::
-
-       $ sudo dnf install ansible.noarch
-
-   For previous versions based on yum, use::
-
-       $ sudo yum install ansible.noarch
-
-   Windows:
-
-   Installation on Windows is complicated but we strive to make it easier
-   in the future. Until then see this blog post for how to
-   `Run Vagrant with Ansible Provisioning on Windows <http://www.azavea.com/blogs/labs/2014/10/running-vagrant-with-ansible-provisioning-on-windows/>`_
-
-#. Fork the project. (See `GitHub <https://help.github.com/articles/fork-a-repo#step-1-fork-the-spoon-knife-repository>`)
-
-#. Clone your fork of Kuma and update submodules::
-
-       git clone git@github.com:<your_username>/kuma.git
-       cd kuma
-       git submodule update --init --recursive
-
-#. Start the VM and install everything. (approx. 15 minutes on a fast net connection).::
-
-      vagrant up
-
-   .. note::
-
-    VirtualBox creates VMs in your system drive. Kuma's VM is
-    approx. 2GB. If it won't fit on your system drive, you will need
-    to `change that directory to another drive <http://emptysquare.net/blog/moving-virtualbox-and-vagrant-to-an-external-drive/>`_.
-
-   At the end, you should see::
-
-      Finished catalog run in .... seconds
-
-   If the above process fails with an error, check `Errors`_.
-
-#. Log into the VM with ssh::
-
-       vagrant ssh
-
-#. Use ``foreman`` inside the VM to start all site services::
-
-       foreman start
-
-   You should see output like::
-
-       20:32:59 web.1        | started with pid 2244
-       20:32:59 celery.1     | started with pid 2245
-       20:32:59 kumascript.1 | started with pid 2246
-       20:32:59 stylus.1     | started with pid 2247
-       ...
-
-#. Visit `https://mdn-local.mozillademos.org/ <https://mdn-local.mozillademos.org/>`_ and add an exception for the security certificate if prompted.
-
-#. Visit the homepage at `https://developer-local.allizom.org <https://developer-local.allizom.org/>`_
-
-#. You've installed Kuma!
-
-   If you want `the badge`_ please `email a screenshot of your browser <mailto:mdn-dev@mozilla.com?subject=Local%20MDN%20Screenshot>`_ to receive the badge.
-
-   .. image:: https://badges.mozilla.org/media/uploads/badge/2/3/23fef80968a03f3ba32321a7f31ae1e2_image_1372816280_0238.png
-
-.. _the badge: https://badges.mozilla.org/badges/badge/Installed-and-ran-Kuma
-
-Dependencies
+Docker setup
 ============
 
-Pure Python Packages
---------------------
+#. Install the `Docker platform`_, following Docker's instructions for your
+   operating system, such as `Docker for Mac`_ for MacOS, or for your
+   `Linux distribution`_.
 
-All of the pure Python dependencies are included in the git repository,
-in the ``vendor`` subdirectory. This allows them to be available on the
-Python path without needing to be installed in the system, allowing multiple
-versions for multiple projects simultaneously.
+   Non-Linux users should increase Docker's memory limits (`Windows`_,
+   `macOS`_) to at least 4 GB, as the default of 2 GB is insufficient.
 
-Compiled Python Packages
-------------------------
+   Linux users will also want to install `Docker Compose`_ and follow
+   `post-install instructions`_ to confirm that the development user can run
+   Docker commmands.
 
-There are a small number of compiled packages, including the MySQL Python
-client. You can install these using ``pip`` or via a package manager.
-To use ``pip``, you only need to do the following.
+   To confirm that Docker is installed correctly, run::
 
-First SSH into the Vagrant VM::
+        docker run hello-world
 
-    vagrant ssh
+   If you find any error using docker commands without ``sudo`` visit using
+   `docker as non-root`_ user.
 
-Then disable the virtualenv that is auto-enabled and install the compiled
-dependencies::
+#. Clone the kuma Git repository, if you haven't already::
 
-    deactivate
-    sudo pip install -r requirements/compiled.txt
+        git clone --recursive https://github.com/mdn/kuma.git
 
-Configuration
-=============
+   If you think you might be submitting pull requests, consider
+   forking the repository first, and then cloning your fork of it.
 
-.. _vagrant-config:
+#. Ensure you are in the existing or newly cloned kuma working copy::
 
-Vagrant
--------
+        cd kuma
 
-If you'd like to change the way Vagrant works, we've added a few
-configuration values that may be worthwhile to look at. In case something
-doesn't suffice for your machine, please let us know!
+#. Initialize and customize ``.env``::
 
-To change the config values, simply create a dotenv_ file (``.env``) in the
-directory (``/home/vagrant/src/.env`` in the Vagrant VM) and write
-``<KEY>=<VALUE>`` for each configuration variable you'd like to set.
+        cp .env-dist.dev .env
+        vim .env  # Or your favorite editor
 
-Here's the configuration variables that are available for Vagrant:
+   Linux users should set the ``UID`` parameter in ``.env``
+   (i.e. change ``#UID=1000`` to ``UID=1000``) to avoid file
+   permission issues when mixing ``docker-compose`` and ``docker``
+   commands. MacOS users do not need to change any of the defaults to
+   get started. Note that there are settings in this file that can be
+   useful when debugging, however.
 
-- ``VAGRANT_NFS``
+#. Pull the Docker images and build the containers::
 
-  Default: true (Windows: false)
-  Whether or not to use NFS for the synced folder.
+        docker-compose pull
+        docker-compose build
 
-- ``VAGRANT_MEMORY_SIZE``
+   (The ``build`` command is effectively a no-op at this point because
+   the ``pull`` command just downloaded pre-built docker images.)
 
-  The size of the Virtualbox VM memory in MB. Default: 2048
+#. Start the containers in the background::
 
-- ``VAGRANT_CPU_CORES``
+        docker-compose up -d
 
-  The number of virtual CPU core the Virtualbox VM should have. Default: 2
+.. _Docker platform: https://www.docker.com/products/overview
+.. _Linux distribution: https://docs.docker.com/engine/installation/linux/
+.. _Docker Compose: https://docs.docker.com/compose/install/
+.. _post-install instructions: https://docs.docker.com/engine/installation/linux/linux-postinstall/
+.. _docker as non-root: https://docs.docker.com/engine/installation/linux/linux-postinstall/
+.. _Windows: https://docs.docker.com/docker-for-windows/#advanced
+.. _macOS: https://docs.docker.com/docker-for-mac/#advanced
 
-- ``VAGRANT_IP``
+.. _provision-the-database:
 
-  The static IP the Virtualbox VM should be assigned to. Default: 192.168.10.55
+Load the sample database
+========================
 
-- ``VAGRANT_GUI``
+Download the sample database with either of the following ``wget`` or
+``curl`` (installed by default on macOS) commands::
 
-  Whether the Virtualbox VM should boot with a GUI. Default: false
+    wget -N https://mdn-downloads.s3-us-west-2.amazonaws.com/mdn_sample_db.sql.gz
+    curl -O https://mdn-downloads.s3-us-west-2.amazonaws.com/mdn_sample_db.sql.gz
 
-- ``VAGRANT_ANSIBLE_VERBOSE``
+Next, upload that sample database into the Kuma web container with::
 
-  Whether the Ansible provisioner should print verbose output. Default: false
+    docker-compose exec web bash -c "zcat mdn_sample_db.sql.gz | ./manage.py dbshell"
 
-A possible ``/home/vagrant/src/.env`` file could look like this for example::
+(This command can be adjusted to restore from an uncompressed database, or
+directly from a ``mysqldump`` command.)
 
-    VAGRANT_MEMORY_SIZE=4096
-    VAGRANT_CPU_CORES=4
-    VAGRANT_ANSIBLE_VERBOSE=true
+Then run the following command::
 
-.. _dotenv: http://12factor.net/config
+    docker-compose exec web ./manage.py migrate
 
-The kuma project
-----------------
+This will ensure the sample database is in sync with your version of Kuma.
 
-Start by creating a file named ``settings_local.py``, and putting this line in
-it::
+Compile locales
+===============
+Localized string databases are included in their source form, and need to be
+compiled to their binary form::
 
-    from settings import *
+    docker-compose exec web make localecompile
 
-Now you can copy and modify any settings from ``settings.py`` into
-``settings_local.py`` and the value will override the default.
+Dozens of lines of warnings will be printed::
 
-.. note::
+    cd locale; ./compile-mo.sh .
+    ./af/LC_MESSAGES/django.po:2: warning: header field 'PO-Revision-Date' still has the initial default value
+    ./af/LC_MESSAGES/django.po:2: warning: header field 'Last-Translator' still has the initial default value
+    ...
+    ./zu/LC_MESSAGES/javascript.po:2: warning: header field 'PO-Revision-Date' still has the initial default value
+    ./zu/LC_MESSAGES/javascript.po:2: warning: header field 'Last-Translator' still has the initial default value
 
-   For some basic features you'll need to use
-   :doc:`feature toggles <feature-toggles>` to enable them.
-
-Database
-~~~~~~~~
-
-At a minimum, you will need to define a database connection. An example
-configuration is::
-
-    DATABASES = {
-        'default': {
-            'NAME': 'kuma',
-            'ENGINE': 'django.db.backends.mysql',
-            'HOST': 'localhost',
-            'PORT': '3306',
-            'USER': 'kuma',
-            'PASSWORD': 'kuma',
-            'OPTIONS': {
-                'sql_mode': 'TRADITIONAL',
-                'charset': 'utf8',
-                'init_command': 'SET '
-                    'storage_engine=INNODB,'
-                    'character_set_connection=utf8,'
-                    'collation_connection=utf8_general_ci',
-            },
-            'ATOMIC_REQUESTS': True,
-            'TEST': {
-                'CHARSET': 'utf8',
-                'COLLATION': 'utf8_general_ci',
-            },
-        },
-    }
-
-Note the two values ``CHARSET`` and ``COLLATION`` of the ``TEST`` setting.
-Without these, the test suite will use MySQL's (moronic) defaults when
-creating the test database (see below) and lots of tests will fail. Hundreds.
-
-Once you've set up the database, you can generate the schema with Django's
-``migrate`` command::
-
-    ./manage.py migrate
-
-This will generate an empty database, which will get you started!
-
-Assets
-~~~~~~
-
-If you want to see images and have the pages formatted with CSS you need to
-set your ``settings_local.py`` with the following::
-
-    DEBUG = True
-    TEMPLATE_DEBUG = DEBUG
-    SERVE_MEDIA = True
-
-Setting ``DEBUG = False`` will put the installation in production mode
-and ask for minified assets. In that case, you will need to generate
-CSS from stylus and compress resource::
-
-    ./scripts/compile-stylesheets
-    ./manage.py compress_assets
-
-.. _enable KumaScript:
-
-KumaScript
-~~~~~~~~~~
-
-To enable KumaScript (Kuma's template system):
-
-#. Sign in
-#. Visit the `constance config admin panel`_
-#. Change ``KUMASCRIPT_TIMEOUT`` to 600
-#. Click "Save" at the bottom
-
-KumaScript is now enabled. You will also want to import the `KumaScript auto-loaded modules`_.
-You can simply copy & paste them from the production site to your local site at
-the same slugs. Or you can email the dev-mdn@lists.mozilla.org list to get a .json file to
-load in your local django admin interface as described in `this comment`_.
-
-.. _constance config admin panel: https://developer-local.allizom.org/admin/constance/config/
-.. _KumaScript auto-loaded modules: https://developer.mozilla.org/en-US/docs/MDN/Kuma/Introduction_to_KumaScript#Auto-loaded_modules
-.. _this comment: https://github.com/mozilla/kuma/issues/2518#issuecomment-53665362
-
-Mozilla Product Details
-~~~~~~~~~~~~~~~~~~~~~~~
-
-One of the packages Kuma uses, Django Mozilla Product Details, needs to
-fetch JSON files containing historical Firefox version data and write them
-to disk. To set this up, just run::
-
-    ./manage.py update_product_details
-
-...to do the initial fetch or run it again to update it.
-
-.. _GitHub Auth:
-
-GitHub Auth
-~~~~~~~~~~~
-
-To enable GitHub authentication ...
-
-`Register your own OAuth application on GitHub`_:
-
-* Application name: MDN (<username>)
-* Homepage url: https://developer-local.allizom.org/docs/MDN/Contribute/Howto/Create_an_MDN_account
-* Application description: My own GitHub app for MDN!
-* Authorization callback URL: https://developer-local.allizom.org/users/github/login/callback/
-
-`Add a django-allauth social app`_ for GitHub:
-
-* Provider: GitHub
-* Name: developer-local.allizom.org
-* Client id: <your GitHub App Client ID>
-* Secret key: <your GitHub App Client Secret>
-* Sites: example.com -> Chosen sites
-
-Now you can sign in with GitHub at https://developer-local.allizom.org/
-
-.. _Add a django-allauth social app: https://developer-local.allizom.org/admin/socialaccount/socialapp/add/
-.. _Register your own OAuth application on GitHub: https://github.com/settings/applications/new
-
-Persona Auth
-~~~~~~~~~~~~
-
-Add the following to ``settings_local.py`` so that Persona works with the
-development instance::
-
-    SITE_URL = 'http://localhost:8000'
-    PROTOCOL = 'http://'
-    DOMAIN = 'localhost'
-    PORT = 8000
-    SESSION_COOKIE_SECURE = False # needed if the server is running on http://
-    SESSION_EXPIRE_AT_BROWSER_CLOSE = False
-
-The ``SESSION_EXPIRE_AT_BROWSER_CLOSE`` setting is not strictly necessary, but
-it's convenient for development.
-
-Secure Cookies
-~~~~~~~~~~~~~~
-
-To prevent error messages like ``Forbidden (CSRF cookie not set.):``, you need to
-set your ``settings_local.py`` with the following::
-
-    CSRF_COOKIE_SECURE = False
-
-Testing it Out
-==============
-
-To start the dev server, run ``./manage.py runserver``, then open up
-``http://localhost:8000``. If everything's working, you should see
-the MDN home page!
-
-You might need to first set ``LC_CTYPE`` if you're on Mac OS X until
-`bug 754728 <https://bugzilla.mozilla.org/show_bug.cgi?id=754728>`_ is fixed::
-
-    export LC_CTYPE=en_US
+Warnings are OK, and will be fixed as translators update the strings on
+Pontoon_. If there is an error, the output will end with the error, such as::
+
+    ./az/LC_MESSAGES/django.po:263: 'msgid' and 'msgstr' entries do not both end with '\n'
+    msgfmt: found 1 fatal error
+
+These need to be fixed by a Kuma developer. Notify them in the #mdn Matrix
+room or open a bug. You can continue with installation, but non-English
+locales will not be localized.
+
+.. _Pontoon: https://pontoon.mozilla.org/projects/mdn/
+
+Generate static assets
+======================
+Static assets such as CSS and JS are included in source form, and need to be
+compiled to their final form::
+
+    docker-compose exec web make build-static
+
+A few thousand lines will be printed, like::
+
+    ## Generating JavaScript translation catalogs ##
+    processing language en_US
+    processing language af
+    processing language ar
+    ...
+    ## Compiling (Sass), collecting, and building static files ##
+    Copying '/app/kuma/static/img/embed/promos/survey.svg'
+    Copying '/app/kuma/static/styles/components/home/column-callout.scss'
+    Copying '/app/build/locale/jsi18n/fy-NL/javascript.js'
+    ...
+    Post-processed 'build/styles/editor-locale-ar.css' as 'build/styles/editor-locale-ar.css'
+    Post-processed 'build/styles/locale-ln.css' as 'build/styles/locale-ln.css'
+    Post-processed 'build/styles/editor-locale-pt-BR.css' as 'build/styles/editor-locale-pt-BR.css'
+    ....
+    1870 static files copied to '/app/static', 125 post-processed.
+
+Visit the homepage
+==================
+Open the homepage at http://localhost.org:8000 . You've installed Kuma!
 
 Create an admin user
---------------------
+====================
+Many Kuma settings require access to the Django admin, including
+configuring social login.  It is useful to create an admin account with
+password access for local development.
 
-You will want to make yourself an admin user to enable important site features.
+If you want to create a new admin account, use ``createsuperuser``::
 
-#. Sign up/in with Persona
+    docker-compose exec web ./manage.py createsuperuser
 
-#. After you sign in, SSH into the VM and make yourself an admin (exchange
-   ``<< YOUR_USERNAME >>`` with the username you used when signing up for
-   Persona)::
+This will prompt you for a username, email address (a fake address like
+``admin@example.com`` will work), and a password.
 
-    vagrant ssh
-    mysql -ukuma -pkuma kuma -e "UPDATE auth_user set is_staff = 1, is_active=1, is_superuser = 1 WHERE username = '<< YOUR_USERNAME >>';"
+If your database has an existing account that you want to use, run the
+management command. Replace ``YOUR_USERNAME`` with your username and
+``YOUR_PASSWORD`` with your password::
 
-   You should see::
+    docker-compose run --rm web ./manage.py ihavepower YOUR_USERNAME \
+    --password YOUR_PASSWORD
 
-      Query OK, 1 row affected (0.01 sec)
-      Rows matched: 1  Changed: 1  Warnings: 0
+With a password-enabled admin account, you can log into Django admin at
+http://localhost.org:8000/admin/login
 
-Create pages
-------------
+.. _enable-github-auth:
 
-You can visit `https://developer-local.allizom.org/docs/new
-<https://developer-local.allizom.org/docs/new>`_ to create new wiki pages as
-needed.
+Update the Sites section
+=======================================
+#. After logging in to the Django admin (an alternative is using the login ``test-super``
+   with password ``test-password``), scroll down to the Sites section.
 
-Many core MDN contributors create a personal ``User:<username>`` page as a
-testing sandbox.
+#. Click on "Change".
 
-Developing with Vagrant
------------------------
+#. Click on the entry that says ``localhost:8000``.
 
-Edit files as usual on your host machine; the current directory is
-mounted via NFS at ``/home/vagrant/src`` within the VM. Updates should be
-reflected without any action on your part.
+#. Change both the domain and display name from ``localhost:8000`` to ``localhost.org:8000``.
 
--  See :doc:`development <development>` for tips not specific to vagrant.
+#. Click "Save".
 
--  Useful vagrant sub-commands::
 
-    vagrant ssh     # Connect to the VM via ssh
-    vagrant suspend # Sleep the VM, saving state
-    vagrant halt    # Shutdown the VM
-    vagrant up      # Boot up the VM
-    vagrant destroy # Destroy the VM
 
-.. _Errors:
+Enable GitHub/Google authentication (optional)
+=======================================
+Since Google's OAuth requires us to use a valid top-level-domain, we're going to use
+http://localhost.org:8000 as an example for every URL here.
 
-Errors during `vagrant up`
---------------------------
+To automate setting Django up for social auth you can run
+``docker-compose exec web ./manage.py configure_social_auth`` and follow its steps (and
+ignore the rest of this section).
 
-``vagrant up`` starts the virtual machine. The first time you run
-``vagrant up`` it also `provisions <https://docs.vagrantup.com/v2/cli/provision.html>`_
-the VM - i.e., it automatically installs and configures Kuma software in the
-VM. We provision the VM with `Ansible`_ roles in the `provisioning directory
-<https://github.com/mozilla/kuma/tree/master/provisioning>`_.
+If you want to do it manually, follow these steps:
 
-Sometimes we put Ansible roles in the wrong order. Which means some
-errors can be fixed by simply provisioning the VM again::
+To enable GitHub authentication, you'll need to
+`register an OAuth application on GitHub`_, with settings like:
 
-    vagrant provision
+* Application name: MDN Development for (<username>).
+* Homepage URL: http://localhost.org:8000/.
+* Application description: My own GitHub app for MDN!
+* Authorization callback URL: http://localhost.org:8000/users/github/login/callback/.
 
-In some rare occasions you might need to run this multiple times. If you find an
-error that is fixed by running ``vagrant provision`` again, please email us the
-error at dev-mdn@lists.mozilla.org and we'll see if we can fix it.
+To enable Google authentication, you'll need to first `create an API project on Google`_.
+After that we'll need to `configure credentials for that project`_ with settings like:
 
-If you see the same error over and over, please ask for :ref:`more help <more-help>`.
+* Name: MDN Development for (<username>).
+* Authorized JavaScript origins: http://localhost.org:8000
+* Authorized redirect URIs: http://localhost.org:8000/users/google/login/callback/
 
-.. _Ansible: http://docs.ansible.com/
+As an admin user, `add a django-allauth social app`_ for both GitHub and Google do the
+following:
 
-Django database migrations
-~~~~~~~~~~~~~~~~~~~~~~~~~~
+* Provider: GitHub/Google.
+* Name: MDN Development.
+* Client id: <*your Client ID*>.
+* Secret key: <*your Client Secret*>.
+* Sites: Move ``locahost:8000`` from "Available sites" to "Chosen sites".
 
-If you see errors that have "Django database migrations" in their
-title try to manually run them in the VM to see more about them.
-To do so::
+``locahost:8000`` needs to either have ID 1 or ``SITE_ID=1`` has to be set in ``.env``
+to its actual ID. You'll also need to set ``DOMAIN=localhost.org`` (no port!) there.
 
-    vagrant ssh
-    python manage.py migrate
+Your hosts file should contain the following lines::
 
-If you get an error, please ask for :ref:`more help <more-help>`.
+    127.0.0.1       localhost demos localhost.org wiki.localhost.org
+    255.255.255.255 broadcasthost
+    ::1             localhost demos localhost.org wiki.localhost.org
 
-Ubuntu
-~~~~~~
+Now you can sign in with GitHub.
 
-On Ubuntu, ``vagrant up`` might fail after being unable to mount NFS shared
-folders. First, make sure you have the nfs-common and nfs-server packages
-installed and also note that you can't export anything via NFS inside an
-encrypted volume or home dir. On Windows NFS won't be used ever by the way.
+To associate your password-only admin account with GitHub:
 
-If that doesn't help you can disable NFS by setting the ``VAGRANT_NFS``
-configration value in a ``.env`` file. See the :ref:`Vagrant configuration
-<vagrant-config>` options for more info.
+#. Login with your password at http://localhost.org:8000/admin/login.
+#. Go to the Homepage at https://developer.mozilla.org/en-US/.
+#. Click your username at the top to view your profile.
+#. Click Edit to edit your profile.
+#. Under My Profiles, click `Use your GitHub account to sign in`_.
 
-If you have other problems during ``vagrant up``, please check
-:doc:`Troubleshooting <troubleshooting>`.
+To create a new account with GitHub, use the regular "Sign in" widget at the
+top of any page.
+
+With social accounts are enabled, you can disable the admin password in the
+Django shell::
+
+    docker-compose exec web ./manage.py shell_plus
+    >>> me = User.objects.get(username='admin_username')
+    >>> me.set_unusable_password()
+    >>> me.save()
+    >>> exit()
+
+.. _register an OAuth application on GitHub: https://github.com/settings/applications/new
+.. _create an API project on Google: https://console.developers.google.com/projectcreate
+.. _configure credentials for that project: https://console.developers.google.com/apis/credentials
+.. _add a django-allauth social app: http://localhost.org:8000/admin/socialaccount/socialapp/add/
+.. _`Use your GitHub account to sign in`: https://developer.mozilla.org/users/github/login/?process=connect
+
+
+Enable Stripe payments (optional)
+=======================================
+#. Go to https://dashboard.stripe.com and create a Stripe account (if you don't have one already).
+#. Go to https://dashboard.stripe.com/apikeys and copy both the publishable and secret key
+   into your ``.env`` file. The respective config keys are ``STRIPE_PUBLIC_KEY`` and
+   ``STRIPE_SECRET_KEY``.
+#. Go to https://dashboard.stripe.com/test/subscriptions/products and create a new product and plan.
+#. Once created copy the plan ID and also put it into ``.env`` as ``STRIPE_PLAN_ID``. Unless you
+   set a custom ID it should start with ``plan_``.
+
+If you're using Stripe in testing mode you can also get test numbers from this site:
+https://stripe.com/docs/testing#cards
+
+Testing Stripe's hooks locally requires setting up a tunneling service, like ngrok (https://ngrok.com).
+You should then set ``CUSTOM_WEBHOOK_HOSTNAME`` to the hostname you get from your tunneling service, e.g. for
+ngrok it might be https://203ebfab.ngrok.io
+After kuma has started you will have a webhook configured in stripe. You can view it on Stripe's dashboard:
+https://dashboard.stripe.com/test/webhooks
+Note that with the free tier a restart of ngrok gives you a new hostname, so you'll have to change the config
+again and restart the server (or manually change the webhook in Stripe's dashboard).
+
+Enable Sendinblue email integration
+===================================
+#. Create a Sendinblue account over at https://www.sendinblue.com (you can skip a lot of the profile set-up,
+   look for skip in the upper right).
+#. Get your v3 API key at https://account.sendinblue.com/advanced/api
+#. Create a list at https://my.sendinblue.com/lists/new/parent_id/1
+#. Add the sendinblue config keys to your .env, the keynames are ``SENDINBLUE_API_KEY`` and ``SENDINBLUE_LIST_ID``
+
+Interact with the Docker containers
+===================================
+The current directory is mounted as the ``/app`` folder in the web and worker
+containers. Changes made to your local
+directory are usually reflected in the running containers. To force the issue,
+the containers for specified services can be restarted::
+
+    docker-compose restart web worker
+
+You can connect to a running container to run commands. For example, you can
+open an interactive shell in the web container::
+
+    docker-compose exec web /bin/bash
+    make bash  # Same command, less typing
+
+To view the logs generated by a container::
+
+    docker-compose logs web
+
+To continuously view logs from all containers::
+
+    docker-compose logs -f
+
+To stop the containers::
+
+    docker-compose stop
+
+If you have made changes to the ``.env`` or ``/etc/hosts`` file, it's a good idea to run::
+
+    docker-compose stop
+    docker-compose up
+
+
+For further information, see the Docker documentation, such as the
+`Docker Overview`_ and the documentation for your operating system.
+You can try Docker's guided tutorials, and apply what you've learned on the
+Kuma Docker environment.
+
+.. _`Docker Overview`: https://docs.docker.com/engine/understanding-docker/

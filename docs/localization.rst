@@ -6,360 +6,192 @@ Kuma is localized with `gettext <http://www.gnu.org/software/gettext/>`_.
 User-facing strings in the code or templates need to be marked for gettext
 localization.
 
-We use `Verbatim <http://localize.mozilla.org/>`_ to provide an easy interface
-to localizing these files. Localizers are also free to download the PO files
-and use whatever tool they are comfortable with.
+We use `Pontoon`_ to provide an easy interface to localizing these files.
+Pontoon allows translators to use the web UI as well as download the PO files,
+use whatever tool the translator feels comfortable with and upload it back to
+Pontoon.
+
+The strings are stored in a separate repository,
+https://github.com/mozilla-l10n/mdn-l10n
+
+.. Note::
+
+   We do not accept pull requests for updating translated strings. Please
+   use `Pontoon`_ instead.
 
 
-Making Strings Localizable
+See the `Django documentation on Translations`_ for how to make strings
+marked for translation in Python and templates.
+
+Unless otherwise noted, run all the commands in this document inside the
+development environment.
+
+For Docker on Linux, set ``UID`` in ``.env`` or enter the environment with
+``docker-compose run --rm --user $(id -u) web bash``, to ensure that created
+files are owned by your development user.
+
+.. _Pontoon: https://pontoon.mozilla.org/projects/mdn/
+.. _Django documentation on Translations: https://docs.djangoproject.com/en/dev/topics/i18n/translation/
+
+Build the localizations
+=======================
+Localizations are found in this repository under the ``locale`` folder.
+This folder is a `git submodule`, linked to the mdn-l10n_ repository.
+
+The gettext portable object (``.po``) files need to be compiled into the
+gettext machine object (``.mo``) files before translations will appear. This
+is done once during initial setup and provisioning, but will be out of date
+when the kuma locales are updated.
+
+To refresh the translations, first update the submodule in your host system::
+
+    git submodule update --init --depth=10 locale
+
+Next, enter the development environment, then:
+
+#. Compile the ``.po`` files::
+
+    make localecompile
+
+#. Update the static JavaScript translation catalogs::
+
+    make compilejsi18n
+
+#. Collect the built files so they are served with requests::
+
+    make collectstatic
+
+.. _`git submodule`: https://www.git-scm.com/docs/git-submodule
+.. _`mdn-l10n`: https://github.com/mozilla-l10n/mdn-l10n
+
+.. _Update the Localizations:
+
+Update the localizations in Kuma
+================================
+
+To get the latest localization from Pontoon users, you need to update the
+submodule.
+
+.. Note::
+
+   This task is done by MDN staff or by automated tools during the push to
+   production. You should not do this as part of a code-based Pull Request.
+
+On the host system:
+
+#. Create a new branch from kuma master::
+
+    git remote -v | grep origin  # Should be main kuma repo
+    git fetch origin
+    git checkout origin/master
+    git checkout -b update-locales  # Pick your own name. Can be combined
+                                    # with updating the kumascript submodule.
+
+#. Update the locale submodule to master::
+
+    cd locale
+    git fetch
+    git checkout origin/master
+    cd ..
+
+#. Commit the update::
+
+    git commit locale -m "Updating localizations"
+
+#. Push to GitHub (your fork or main repository), and open a Pull Request.
+
+It is possible to break deployments by adding a bad translation. The TravisCI_
+job ``TOXENV=locales`` will test that the deployment should pass, and should
+pass before merging the PR.
+
+.. _`TravisCI`: https://travis-ci.com/mdn/kuma
+
+.. _Updating the localizable strings in Pontoon:
+
+Update the localizable strings in Pontoon
+=========================================
+When localizable strings are added, changed, or removed in the code, they need
+to be gathered into ``.po`` files for translation. The TravisCI_ job
+``TOXENV=locales`` attempts to detect when strings change by displaying the
+differences in ``locale/templates/LC_MESSAGES/django.pot``, but only when a
+``msgid`` changes.
+
+When this happens, the strings need to be exported to the mdn-l10n_ repository
+so that they are available in Pontoon. If done incorrectly, then the work of
+localizers can be lost. This task is done by staff when
+:ref:`preparing for deployment <Pre-Deployment>`.
+
+Add a new locale to Pontoon
+===========================
+The process for getting a new locale on MDN is documented at
+`Starting a new MDN localization`_. One step is to enable translation of the
+UI strings. This will also enable the locale in development environments and
+on https://developer.allizom.org.
+
+.. Note::
+
+   This task is done by MDN staff.
+
+This example shows adding a Bulgarian (bg) locale. Change ``bg`` to the locale
+code of the language you are adding.
+
+#. `Updating the localizable strings in Pontoon`_ as above, so that your
+   commit will be limited to the new locale.
+
+#. In ``kuma/settings/common.py``, add the locale to ``ACCEPTED_LOCALES`` and
+   ``CANDIDATE_LOCALES``, and increase ``PUENTE['VERSION']``.
+
+#. Download the latest ``languages.json`` from
+   https://product-details.mozilla.org/1.0/languages.json
+   and place it at ``kuma/settings/languages.json``.
+
+#. Add the locale to ``translate_locales.html`` and the ``locale/`` folder::
+
+    make locale LOCALE=bg
+
+#. Generate the compiled files for all the locales, including the new one::
+
+    make localerefresh
+
+#. Restart the web server and verify that Django loads the new locale without
+   errors by visiting the locale's home page, for example
+   http://localhost:8000/bg/.
+
+#. Commit the locale submodule and push to `mdn-l10n`_, as described above in
+   `Updating the localizable strings in Pontoon`_.  The other locales should
+   include a new string representing the new language.
+
+#. (Optional) Generate migrations that includes the new locale::
+
+   ./manage.py makemigrations users wiki --name update_locale
+
+#. Commit the changes to ``locale``,
+   ``jinja2/includes/translate_locales.html``, and ``kuma/settings``, and open
+   a Pull Request.
+
+#. Enable the language in Pontoon_, and notify the language community to start
+   UI translations.
+
+.. _Starting a new MDN localization: https://developer.mozilla.org/en-US/docs/MDN/Contribute/Localize/Starting_a_localization
+
+Enable a new locale on MDN
 ==========================
+Once the new translation community has completed the rest of the process for
+`starting a new MDN localization`_, it is time to enable the language for page
+translations:
 
-Making strings in templates localizable is exceptionally easy. Making strings
-in Python localizable is a little more complicated. The short answer, though,
-is just wrap the string in ``_()``.
+.. Note::
 
+   This task is done by MDN staff.
 
-Interpolation
--------------
+#. Remove the locale from ``CANDIDATE_LOCALES`` in
+   ``kuma/settings/common.py``. Ensure it remains in ``ACCEPTED_LOCALES``.
 
-A string is often a combination of a fixed string and something changing, for
-example, ``Welcome, James`` is a combination of the fixed part ``Welcome,``,
-and the changing part ``James``. The naive solution is to localize the first
-part and the follow it with the name::
+#. Restart the web server and verify that Django loads the new locale without
+   errors by visiting the locale's home page, for example
+   http://localhost:8000/bg/.
 
-    _('Welcome, ') + username
+#. Commit the change to ``kuma/settings/common.py`` and open a Pull Request.
 
-This is **wrong!**
-
-In some locales, the word order may be different. Use Python string formatting
-to interpolate the changing part into the string::
-
-    _('Welcome, {name}').format(name=username)
-
-Python gives you a lot of ways to interpolate strings. The best way is to use
-Py3k formatting and kwargs. That's the clearest for localizers.
-
-The worst way is to use ``%(label)s``, as localizers seem to have all manner
-of trouble with it. Options like ``%s`` and ``{0}`` are somewhere in the
-middle, and generally OK if it's clear from context what they will be.
-
-
-Localization Comments
----------------------
-
-Sometimes, it can help localizers to describe where a string comes from,
-particularly if it can be difficult to find in the interface, or is not very
-self-descriptive (e.g. very short strings). If you immediately precede the
-string with a comment that starts ``L10n:``, the comment will be added to the
-PO file, and visible to localizers.
-
-
-Adding Context with msgctxt
----------------------------
-
-Strings may be the same in English, but different in other languages. English,
-for example, has no grammatical gender, and sometimes the noun and verb forms
-of a word are identical.
-
-To make it possible to localize these correctly, we can add "context" (known in
-gettext as "msgctxt") to differentiate two otherwise identical strings.
-
-For example, the string "Search" may be a noun or a verb in English. In a
-heading, it may be considered a noun, but on a button, it may be a verb. It's
-appropriate to add a context (like "button") to one of them.
-
-Generally, we should only add context if we are sure the strings aren't used in
-the same way, or if localizers ask us to.
-
-
-Plurals
--------
-
-"You have 1 new messages" grates on discerning ears. Fortunately, gettext gives
-us a way to fix that in English *and* other locales, the ``ngettext``
-function::
-
-    ngettext('singular', 'plural', count)
-
-A more realistic example might be::
-
-    ngettext('Found {count} result.',
-             'Found {count} results',
-             len(results)).format(count=len(results))
-
-This method takes three arguments because English only needs three, i.e., zero
-is considered "plural" for English. Other locales may have different plural
-rules, and require different phrases for, say 0, 1, 2-3, 4-10, >10. That's
-absolutely fine, and gettext makes it possible.
-
-
-Strings in Templates
---------------------
-
-When putting new text into a template, all you need to do is wrap it in a
-``_()`` call::
-
-    <h1>{{ _('Heading') }}</h1>
-
-Adding context is easy, too::
-
-    <h1>{{ _('Heading', 'context') }}</h1>
-
-L10n comments need to be Jinja2 comments::
-
-    {# L10n: Describes this heading #}
-    <h1>{{ _('Heading') }}</h1>
-
-Note that Jinja2 escapes all content output through ``{{ }}`` by default. To
-put HTML in a string, you'll need to add the ``|safe`` filter::
-
-    <h1>{{ _('Firefox <span>Help</span>')|safe }}</h1>
-
-To interpolate, you should use one of two Jinja2 filters: ``|f()`` or, in some
-cases, ``|fe()``. ``|f()`` has exactly the same arguments as
-``u''.format()``::
-
-    {{ _('Welcome, {name}!')|f(name=request.user.username) }}
-
-The ``|fe()`` is exactly like the ``|f()`` filter, but escapes its arguments
-before interpolating, then returns a "safe" object. Use it when the localized
-string contains HTML::
-
-    {{ _('Found <strong>{0}</strong> results.')|fe(num_results) }}
-
-Note that you *do not need* to use ``|safe`` with ``|fe()``. Also note that
-while it may look similar, the following is *not* safe::
-
-    {{ _('Found <strong>{0}</strong> results.')|f(num_results)|safe }}
-
-The ``ngettext`` function is also available::
-
-    {{ ngettext('Found {0} result.',
-                'Found {0} results.',
-                num_results)|f(num_results) }}
-
-
-Using ``{% trans %}`` Blocks for Long Strings
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-When a string is very long, i.e. long enough to make GitHub scroll sideways, it
-should be line-broken and put in a ``{% trans %}`` block. ``{% trans %}``
-blocks work like other block-level tags in Jinja2, except they cannot have
-other tags, except strings, inside them.
-
-The only thing that should be inside a ``{% trans %}`` block is printing a
-string with ``{{ string }}``. These are defined in the opening ``{% trans %}``
-tag::
-
-    {% trans user=request.user.username %}
-        Thanks for registering, {{ user }}! We're so...
-        hope that you'll...
-    {% trans %}
-
-
-Strings in Python
------------------
-
-*NB: Whenever you are adding a string in Python, ask yourself if it really
-needs to be there, or if it should be in the template. Keep logic and
-presentation separate!*
-
-Strings in Python are more complex for two reasons:
-
-#. We need to make sure we're always using Unicode strings and the
-   Unicode-friendly versions of the functions.
-
-#. If you use the ``ugettext`` function in the wrong place, the string may end
-   up in the wrong locale!
-
-Here's how you might localize a string in a view::
-
-    from tower import ugettext as _
-
-    def my_view(request):
-        if request.user.is_superuser:
-            msg = _(u'Oh hi, staff!')
-        else:
-            msg = _(u'You are not staff!')
-
-Interpolation is done through normal Python string formatting::
-
-    msg = _(u'Oh, hi, {user}').format(user=request.user.username)
-
-``ugettext`` supports context, too::
-
-    msg = _('Search', 'context')
-
-L10n comments are normal one-line Python comments::
-
-    # L10n: A message to users.
-    msg = _(u'Oh, hi there!')
-
-If you need to use plurals, import the function ``ungettext`` from Tower::
-
-    from tower import ungettext, ugettext as _
-
-    n = len(results)
-    msg = ungettext('Found {0} result', 'Found {0} results', n).format(n)
-
-
-Lazily Translated Strings
-^^^^^^^^^^^^^^^^^^^^^^^^^
-
-You can use ``ugettext`` or ``ungettext`` only in views or functions called
-from views. If the function will be evaluated when the module is loaded, then
-the string may end up in English or the locale of the last request! (We're
-tracking down that issue.)
-
-Examples include strings in module-level code, arguments to functions in class
-definitions, strings in functions called from outside the context of a view. To
-localize these strings, you need to use the ``_lazy`` versions of the above
-methods, ``ugettext_lazy`` and ``ungettext_lazy``. The result doesn't get
-translated until it is evaluated as a string, for example by being output or
-passed to ``unicode()``::
-
-    from tower import ugettext_lazy as _lazy
-
-    PAGE_TITLE = _lazy(u'Page Title')
-
-``ugettext_lazy`` also supports context.
-
-It is very important to pass Unicode objects to the ``_lazy`` versions of these
-functions. Failure to do so results in significant issues when they are
-evaluated as strings.
-
-If you need to work with a lazily-translated string, you'll first need to
-convert it to a ``unicode`` object::
-
-    from tower import ugettext_lazy as _lazy
-
-    WELCOME = _lazy(u'Welcome, %s')
-
-    def my_view(request):
-        # Fails:
-        WELCOME % request.user.username
-
-        # Works:
-        unicode(WELCOME) % request.user.username
-
-.. _get-localizations:
-
-Getting the Localizations
-=========================
-
-Localizations are not stored in this repository, but are in Mozilla's SVN::
-
-    http://svn.mozilla.org/projects/mdn/trunk/locale
-
-You don't need the localization files for general development. However, if
-you need them for something, they're pretty easy to get::
-
-    $ cd kuma
-    $ svn checkout https://svn.mozilla.org/projects/mdn/trunk/locale
-
-(Alternatively, you can do yourself a favor and use::
-
-    $ git svn clone -r HEAD https://svn.mozilla.org/projects/mdn/trunk/locale
-
-if you're a git fan.)
-
-Then run the Django management command to update the static JavaScript
-translation catalogs::
-
-    python manage.py compilejsi18n
-
-Updating the Localizations
-==========================
-When we add or update strings, we need to update `Verbatim <http://localize.mozilla.org/>`_
-templates and PO files for localizers. If you commit changes to SVN without
-updating Verbatim, localizers will have merge head-aches.
-
-1.  Check out the localizations (See `get-localizations`_)
-
-2.  Run the following in the virtual machine (see :doc:`installation`)::
-
-        $ python manage.py extract
-
-3.  Commit the POT file.
-
-    If you used ``svn checkout`` above::
-
-        $ cd locale
-        $ svn up
-        $ svn ci -m "MDN string update YYYY-MM-DD"
-
-    If you used ``git svn clone`` above::
-
-        $ cd locale
-        $ git svn fetch
-        $ git add -A
-        $ git commit -m "MDN string update YYYY-MM-DD"
-        $ git svn dcommit
-
-.. note:: You need verbatim permissions for the following. If you don't have permissions, email `groovecoder <mailto:lcrouch@mozilla.com>`_ or `mathjazz <mailto:matjaz@mozilla.com>`_ to do the following ...
-
-4.  Go to the `MDN templates on Verbatim
-    <https://localize.mozilla.org/templates/mdn/>`_
-
-5.  Click 'Update all from VCS'
-
-6.  ssh to sm-verbatim01 (See `L10n:Verbtim
-    <https://wiki.mozilla.org/L10n:Verbatim>`_ on wiki.mozilla.org)
-
-7.  Update all locales against templates::
-
-        sudo su verbatim
-        cd /data/www/localize.mozilla.org/verbatim/pootle_env/Pootle
-        POOTLE_SETTINGS=localsettings.py python2.6 manage.py
-        update_against_templates --project=mdn -v 2
-
-Adding a new Locale
-===================
-
-1.  Check out the localizations (See `get-localizations`_)
-
-2.  Follow `the "Add locale" instructions on wiki.mozilla.org
-    <https://wiki.mozilla.org/L10n:Verbatim#Adding_a_locale_to_a_Verbatim_project>`_.
-
-3.  Update your locale repo to get the new locale::
-
-        $ cd locale
-        $ svn up
-        $ cd ..
-
-4.  Update `languages.json` file via product details::
-
-        $ ./manage.py update_product_details
-        $ cp ../product_details_json/languages.json kuma/languages.json
-
-5.  Add the locale to `MDN_LANGUAGES` in `settings.py`
-
-6. Create the `jsi18n` file for the new locale::
-
-        $ ./manage.py compilejsi18n
-
-7.  Verify django loads new locale without errors by visiting the locale's home
-    page. E.g., https://developer-local.allizom.org/ml/
-
-8.  BONUS: Use `podebug` to test a fake translation of the locale::
-
-        $ cd locale
-        $ podebug --rewrite=bracket templates/LC_MESSAGES/messages.pot
-        ml/LC_MESSAGES/messages.po
-        $ ./compile-mo.sh .
-
-    Restart the django server and re-visit the new locale to verify it shows
-    "translated" strings in the locale.
-
-9.  Update the `locale.tar.gz` and `product_details_json.tar.gz` files used by
-    `our Travis install script`_::
-
-        $ python manage.py update_product_details
-        $ tar -czf etc/data/product_details_json.tar.gz ../product_details_json/
-        $ tar -czf etc/data/locale.tar.gz locale/
-
-10.  Commit the changes to `settings.py`, `locale.tar.gz`, and
-    `product_details_json.tar.gz`
-
-
-.. _our Travis install script: https://github.com/mozilla/kuma/blob/master/scripts/travis-install
+When the change is merged and deployed, inform the localization lead and the
+community that they can begin translating content.

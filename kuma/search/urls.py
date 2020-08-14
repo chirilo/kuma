@@ -1,19 +1,13 @@
-from django.conf.urls import url
-
-from rest_framework.urlpatterns import format_suffix_patterns
+from django.urls import re_path
 
 from . import views
 
+lang_base_urlpatterns = [
+    re_path(r"^$", views.search, name="search"),
+    re_path(r"^.(?P<format>json)$", views.SearchRedirectView.as_view()),
+]
 
-# this allows using ".json" extensions for the view to force json output
-urlpatterns = format_suffix_patterns(
-    [url(r'^$', views.search, name='search')])
 
-urlpatterns += [
-    url(r'^/xml$',
-        views.plugin,
-        name='search.plugin'),
-    url(r'^/suggestions$',
-        views.suggestions,
-        name='search.suggestions'),
+lang_urlpatterns = [
+    re_path(r"^xml$", views.plugin, name="search.plugin"),
 ]

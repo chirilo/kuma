@@ -1,33 +1,58 @@
-import urllib
-from hashlib import md5
-
+import pytest
+from allauth.socialaccount.models import SocialAccount
 from django.conf import settings
 
-from nose.tools import eq_, ok_
-
-from . import UserTestCase
-from ..helpers import gravatar_url, public_email
+from ..templatetags.jinja_helpers import get_avatar_url, is_username_taken, public_email
 
 
-class HelperTestCase(UserTestCase):
+@pytest.mark.parametrize(
+    "providers",
+    (("persona",), ("persona", "github", "google"), ("persona", "google", "github"),),
+    ids=("default", "github", "google"),
+)
+def test_get_avatar_url(wiki_user, providers):
+    SOCIAL_ACCOUNT_DATA = {
+        "github": {
+            "uid": 1234567,
+            "extra_data": {"avatar_url": "https://github/yada/yada"},
+        },
+        "google": {
+            "uid": 123456789012345678901,
+            "extra_data": {"picture": "https://google/yada/yada"},
+        },
+        "persona": {"uid": wiki_user.email},
+    }
+    first_valid_avatar_url = None
+    for provider in providers:
+        sa = SocialAccount.objects.create(
+            user=wiki_user, provider=provider, **SOCIAL_ACCOUNT_DATA[provider]
+        )
+        if (not first_valid_avatar_url) and (provider != "persona"):
+            first_valid_avatar_url = sa.get_avatar_url()
+    assert get_avatar_url(wiki_user) == (
+        first_valid_avatar_url or settings.DEFAULT_AVATAR
+    )
 
-    def setUp(self):
-        super(HelperTestCase, self).setUp()
-        self.u = self.user_model.objects.get(username=u'testuser')
 
-    def test_default_gravatar(self):
-        d_param = urllib.urlencode({'d': settings.DEFAULT_AVATAR})
-        ok_(d_param in gravatar_url(self.u.email),
-            "Bad default avatar: %s" % gravatar_url(self.u.email))
+def test_get_avatar_url_default(wiki_user):
+    assert get_avatar_url(wiki_user) == settings.DEFAULT_AVATAR
 
-    def test_gravatar_url(self):
-        self.u.email = 'test@test.com'
-        ok_(md5(self.u.email).hexdigest() in gravatar_url(self.u.email))
 
-    def test_public_email(self):
-        eq_('<span class="email">'
-            '&#109;&#101;&#64;&#100;&#111;&#109;&#97;&#105;&#110;&#46;&#99;'
-            '&#111;&#109;</span>', public_email('me@domain.com'))
-        eq_('<span class="email">'
-            '&#110;&#111;&#116;&#46;&#97;&#110;&#46;&#101;&#109;&#97;&#105;'
-            '&#108;</span>', public_email('not.an.email'))
+def test_public_email():
+    assert (
+        '<span class="email">'
+        "&#109;&#101;&#64;&#100;&#111;&#109;&#97;&#105;&#110;&#46;&#99;"
+        "&#111;&#109;</span>" == public_email("me@domain.com")
+    )
+    assert (
+        '<span class="email">'
+        "&#110;&#111;&#116;&#46;&#97;&#110;&#46;&#101;&#109;&#97;&#105;"
+        "&#108;</span>" == public_email("not.an.email")
+    )
+
+
+def test_is_username_taken(wiki_user):
+    assert is_username_taken(wiki_user.username)
+    assert is_username_taken(wiki_user.username.upper())
+    assert not is_username_taken("nonexistent")
+    assert not is_username_taken(None)

@@ -1,145 +1,60 @@
-from datetime import timedelta
+from datetime import datetime
 
-from django.test.utils import override_settings
-from nose.tools import eq_, ok_
+import pytest
 
-from kuma.users.tests import UserTestCase, user
-
-from . import revision
-from ..jobs import DocumentZoneStackJob, DocumentContributorsJob
-from ..models import Document, DocumentZone
+from ..jobs import DocumentContributorsJob
+from ..models import Revision
 
 
-class DocumentZoneTests(UserTestCase):
-    """Tests for content zones in topic hierarchies"""
+@pytest.mark.parametrize("mode", ["maintenance-mode", "normal-mode"])
+def test_contributors(
+    db, settings, wiki_user_3, root_doc_with_mixed_contributors, mode
+):
+    """
+    Tests basic operation, ordering, caching, and handling of banned and
+    inactive contributors.
+    """
+    settings.MAINTENANCE_MODE = mode == "maintenance-mode"
 
-    def test_find_roots(self):
-        """Ensure sub pages can find the content zone root"""
-        root_rev = revision(title='ZoneRoot', slug='ZoneRoot',
-                            content='This is the Zone Root',
-                            is_approved=True, save=True)
-        root_doc = root_rev.document
+    fixture = root_doc_with_mixed_contributors
+    root_doc = fixture.doc
 
-        middle_rev = revision(title='Zonemiddle', slug='Zonemiddle',
-                              content='This is the Zone middle',
-                              is_approved=True, save=True)
-        middle_doc = middle_rev.document
-        middle_doc.parent_topic = root_doc
-        middle_doc.save()
+    job = DocumentContributorsJob()
+    # Set this to true so we bypass the Celery task queue.
+    job.fetch_on_miss = True
+    contributors = job.get(root_doc.pk)
 
-        sub_rev = revision(title='SubPage', slug='SubPage',
-                           content='This is a subpage',
-                           is_approved=True, save=True)
-        sub_doc = sub_rev.document
-        sub_doc.parent_topic = middle_doc
-        sub_doc.save()
+    if settings.MAINTENANCE_MODE:
+        assert not contributors
+        return
 
-        sub_sub_rev = revision(title='SubSubPage', slug='SubSubPage',
-                               content='This is a subsubpage',
-                               is_approved=True, save=True)
-        sub_sub_doc = sub_sub_rev.document
-        sub_sub_doc.parent_topic = sub_doc
-        sub_sub_doc.save()
+    valid_contrib_ids = [user.pk for user in fixture.contributors.valid]
+    # Banned and inactive contributors should not be included.
+    assert [c["id"] for c in contributors] == valid_contrib_ids
 
-        other_rev = revision(title='otherPage', slug='otherPage',
-                             content='This is an otherpage',
-                             is_approved=True, save=True)
-        other_doc = other_rev.document
+    banned_user = fixture.contributors.banned.user
 
-        root_zone = DocumentZone(document=root_doc)
-        root_zone.save()
+    # Delete the ban.
+    fixture.contributors.banned.ban.delete()
 
-        middle_zone = DocumentZone(document=middle_doc)
-        middle_zone.save()
+    # The freshly un-banned user is now among the contributors because the
+    # cache has been invalidated.
+    contributors = job.get(root_doc.pk)
+    got = set(c["id"] for c in contributors)
+    assert banned_user.pk in got
 
-        eq_(self.get_zone_stack(root_doc)[0], root_zone)
-        eq_(self.get_zone_stack(middle_doc)[0], middle_zone)
-        eq_(self.get_zone_stack(sub_doc)[0], middle_zone)
-        eq_(0, len(self.get_zone_stack(other_doc)))
+    # Another revision should invalidate the job's cache.
+    root_doc.current_revision = Revision.objects.create(
+        document=root_doc,
+        creator=wiki_user_3,
+        content="<p>The root document re-envisioned.</p>",
+        comment="Done with the previous version.",
+        created=datetime(2017, 4, 24, 12, 35),
+    )
+    root_doc.save()
 
-        zone_stack = self.get_zone_stack(sub_sub_doc)
-        eq_(zone_stack[0], middle_zone)
-        eq_(zone_stack[1], root_zone)
-
-    def get_zone_stack(self, doc):
-        return DocumentZoneStackJob().get(doc.pk)
-
-
-class DocumentContributorsTests(UserTestCase):
-
-    def test_contributors(self):
-        contrib = user(save=True)
-        rev = revision(creator=contrib, save=True)
-        job = DocumentContributorsJob()
-        # setting this to true to be able to test this
-        job.fetch_on_miss = True
-        eq_(contrib.pk, job.get(rev.document.pk)[0]['id'])
-
-    @override_settings(CELERY_ALWAYS_EAGER=True)
-    def test_contributors_ordering(self):
-        contrib_1 = user(save=True)
-        contrib_2 = user(save=True)
-        contrib_3 = user(save=True)
-        rev_1 = revision(creator=contrib_1, save=True)
-        rev_2 = revision(creator=contrib_2,
-                         document=rev_1.document,
-                         # live in the future to make sure we handle the lack
-                         # of microseconds support in Django 1.7 nicely
-                         created=rev_1.created + timedelta(seconds=1),
-                         save=True)
-        ok_(rev_1.created < rev_2.created)
-        job = DocumentContributorsJob()
-        job_user_pks = [contributor['id']
-                        for contributor in job.fetch(rev_1.document.pk)]
-        # the user with the more recent revision first
-        recent_contributors_pks = [contrib_2.pk, contrib_1.pk]
-        eq_(job_user_pks, recent_contributors_pks)
-
-        # a third revision should now show up again and
-        # the job's cache is invalidated
-        rev_3 = revision(creator=contrib_3,
-                         document=rev_1.document,
-                         created=rev_2.created + timedelta(seconds=1),
-                         save=True)
-        ok_(rev_2.created < rev_3.created)
-        job_user_pks = [contributor['id']
-                        for contributor in job.fetch(rev_1.document.pk)]
-        # The new revision shows up
-        eq_(job_user_pks, [contrib_3.pk] + recent_contributors_pks)
-
-    @override_settings(CELERY_ALWAYS_EAGER=True)
-    def test_contributors_inactive_or_banned(self):
-        contrib_1 = user(save=True)
-        contrib_2 = user(is_active=False, save=True)
-        contrib_3 = user(save=True)
-        contrib_3_ban = contrib_3.bans.create(by=contrib_1, reason='because reasons')
-        revision_2 = revision(creator=contrib_1, save=True)
-
-        revision(creator=contrib_2, document=revision_2.document, save=True)
-        revision(creator=contrib_3, document=revision_2.document, save=True)
-
-        job = DocumentContributorsJob()
-        # setting this to true to be able to test this
-        job.fetch_on_miss = True
-
-        contributors = job.get(revision_2.document.pk)
-        contrib_ids = [contrib['id'] for contrib in contributors]
-        self.assertIn(contrib_1.id, contrib_ids)
-        self.assertNotIn(contrib_2.id, contrib_ids)
-        self.assertNotIn(contrib_3.id, contrib_ids)
-
-        # delete the ban again
-        contrib_3_ban.delete()
-        # reloading the document from db to prevent cache
-        doc = Document.objects.get(pk=revision_2.document.pk)
-        # user not in contributors because job invalidation hasn't happened
-        contrib_ids = [contrib['id']
-                       for contrib in job.get(revision_2.document.pk)]
-        self.assertNotIn(contrib_3.id, contrib_ids)
-
-        # trigger the invalidation manually by saving the document
-        doc.save()
-        doc = Document.objects.get(pk=revision_2.document.pk)
-        contrib_ids = [contrib['id']
-                       for contrib in job.get(revision_2.document.pk)]
-        self.assertIn(contrib_3.id, contrib_ids)
+    # The new contributor shows up and is first, followed
+    # by the freshly un-banned user, and then the rest.
+    contributors = job.get(root_doc.pk)
+    got = set(c["id"] for c in contributors)
+    assert got == set([wiki_user_3.pk, banned_user.pk] + valid_contrib_ids)

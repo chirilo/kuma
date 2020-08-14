@@ -1,2 +1,0 @@
-Sphinx
-mdn-sphinx-theme==2015.2

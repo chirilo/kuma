@@ -1,30 +1,28 @@
-# -*- coding: utf-8 -*-
-from django.http import Http404
-from django.shortcuts import get_object_or_404, get_list_or_404, render
+from django.shortcuts import get_list_or_404, get_object_or_404, render
 from django.views.decorators.http import require_GET
+from ratelimit.decorators import ratelimit
 
+from kuma.core.decorators import (
+    block_user_agents,
+    ensure_wiki_domain,
+    shared_cache_control,
+)
 from kuma.core.utils import paginate
 
 from ..constants import DOCUMENTS_PER_PAGE
-from ..decorators import process_document_path, prevent_indexing
-from ..models import (Document, DocumentTag, Revision, ReviewTag,
-                      LocalizationTag)
-from ..queries import MultiQuerySet
+from ..decorators import prevent_indexing, process_document_path
+from ..models import Document, DocumentTag, LocalizationTag, ReviewTag, Revision
 
 
+@ensure_wiki_domain
+@shared_cache_control
+@block_user_agents
 @require_GET
-def documents(request, category=None, tag=None):
+@ratelimit(key="user_or_ip", rate="40/m", block=True)
+def documents(request, tag=None):
     """
-    List wiki documents depending on the optionally given category or tag.
+    List wiki documents depending on the optionally given tag.
     """
-    category_id = None
-    if category:
-        try:
-            category_id = int(category)
-            category = unicode(dict(Document.CATEGORIES)[category_id])
-        except (KeyError, ValueError):
-            raise Http404
-
     # Taggit offers a slug - but use name here, because the slugification
     # stinks and is hard to customize.
     tag_obj = None
@@ -34,189 +32,214 @@ def documents(request, category=None, tag=None):
             if matching_tag.name.lower() == tag.lower():
                 tag_obj = matching_tag
                 break
-    docs = Document.objects.filter_for_list(locale=request.locale,
-                                            category=category_id,
-                                            tag=tag_obj)
+    docs = Document.objects.filter_for_list(locale=request.LANGUAGE_CODE, tag=tag_obj)
     paginated_docs = paginate(request, docs, per_page=DOCUMENTS_PER_PAGE)
     context = {
-        'documents': paginated_docs,
-        'count': docs.count(),
-        'category': category,
-        'tag': tag,
+        "documents": paginated_docs,
+        "tag": tag,
     }
-    return render(request, 'wiki/list/documents.html', context)
+    return render(request, "wiki/list/documents.html", context)
 
 
+@ensure_wiki_domain
+@shared_cache_control
+@block_user_agents
 @require_GET
-def templates(request):
-    """
-    Returns listing of all templates
-    """
-    docs = Document.objects.filter(is_template=True).order_by('title')
-    paginated_docs = paginate(request, docs, per_page=DOCUMENTS_PER_PAGE)
-    context = {
-        'documents': paginated_docs,
-        'count': docs.count(),
-        'is_templates': True,
-    }
-    return render(request, 'wiki/list/documents.html', context)
-
-
-@require_GET
+@ratelimit(key="user_or_ip", rate="40/m", block=True)
 def tags(request):
     """
     Returns listing of all tags
     """
-    tags = DocumentTag.objects.order_by('name')
+    tags = DocumentTag.objects.order_by("name")
     tags = paginate(request, tags, per_page=DOCUMENTS_PER_PAGE)
-    return render(request, 'wiki/list/tags.html', {'tags': tags})
+    return render(request, "wiki/list/tags.html", {"tags": tags})
 
 
+@ensure_wiki_domain
+@shared_cache_control
+@block_user_agents
 @require_GET
+@ratelimit(key="user_or_ip", rate="40/m", block=True)
 def needs_review(request, tag=None):
     """
     Lists wiki documents with revisions flagged for review
     """
     tag_obj = tag and get_object_or_404(ReviewTag, name=tag) or None
-    docs = Document.objects.filter_for_review(locale=request.locale,
-                                              tag=tag_obj)
+    docs = Document.objects.filter_for_review(locale=request.LANGUAGE_CODE, tag=tag_obj)
     paginated_docs = paginate(request, docs, per_page=DOCUMENTS_PER_PAGE)
     context = {
-        'documents': paginated_docs,
-        'count': docs.count(),
-        'tag': tag_obj,
-        'tag_name': tag,
+        "documents": paginated_docs,
+        "count": docs.count(),
+        "tag": tag_obj,
+        "tag_name": tag,
     }
-    return render(request, 'wiki/list/needs_review.html', context)
+    return render(request, "wiki/list/needs_review.html", context)
 
 
+@ensure_wiki_domain
+@shared_cache_control
+@block_user_agents
 @require_GET
+@ratelimit(key="user_or_ip", rate="40/m", block=True)
 def with_localization_tag(request, tag=None):
     """
     Lists wiki documents with localization tag
     """
     tag_obj = tag and get_object_or_404(LocalizationTag, name=tag) or None
-    docs = Document.objects.filter_with_localization_tag(locale=request.locale,
-                                                         tag=tag_obj)
+    docs = Document.objects.filter_with_localization_tag(
+        locale=request.LANGUAGE_CODE, tag=tag_obj
+    )
     paginated_docs = paginate(request, docs, per_page=DOCUMENTS_PER_PAGE)
     context = {
-        'documents': paginated_docs,
-        'count': docs.count(),
-        'tag': tag_obj,
-        'tag_name': tag,
+        "documents": paginated_docs,
+        "count": docs.count(),
+        "tag": tag_obj,
+        "tag_name": tag,
     }
-    return render(request, 'wiki/list/with_localization_tags.html', context)
+    return render(request, "wiki/list/with_localization_tags.html", context)
 
 
+@ensure_wiki_domain
+@shared_cache_control
+@block_user_agents
 @require_GET
+@ratelimit(key="user_or_ip", rate="40/m", block=True)
 def with_errors(request):
     """
     Lists wiki documents with (KumaScript) errors
     """
-    docs = Document.objects.filter_for_list(locale=request.locale, errors=True)
+    docs = Document.objects.filter_for_list(locale=request.LANGUAGE_CODE, errors=True)
     paginated_docs = paginate(request, docs, per_page=DOCUMENTS_PER_PAGE)
     context = {
-        'documents': paginated_docs,
-        'count': docs.count(),
-        'errors': True,
+        "documents": paginated_docs,
+        "errors": True,
     }
-    return render(request, 'wiki/list/documents.html', context)
+    return render(request, "wiki/list/documents.html", context)
 
 
+@ensure_wiki_domain
+@shared_cache_control
+@block_user_agents
 @require_GET
+@ratelimit(key="user_or_ip", rate="40/m", block=True)
 def without_parent(request):
     """Lists wiki documents without parent (no English source document)"""
-    docs = Document.objects.filter_for_list(locale=request.locale,
-                                            noparent=True)
+    docs = Document.objects.filter_for_list(locale=request.LANGUAGE_CODE, noparent=True)
     paginated_docs = paginate(request, docs, per_page=DOCUMENTS_PER_PAGE)
     context = {
-        'documents': paginated_docs,
-        'count': docs.count(),
-        'noparent': True,
+        "documents": paginated_docs,
+        "noparent": True,
     }
-    return render(request, 'wiki/list/documents.html', context)
+    return render(request, "wiki/list/documents.html", context)
 
 
+@ensure_wiki_domain
+@shared_cache_control
+@block_user_agents
 @require_GET
+@ratelimit(key="user_or_ip", rate="400/m", block=True)
 def top_level(request):
     """Lists documents directly under /docs/"""
-    docs = Document.objects.filter_for_list(locale=request.locale,
-                                            toplevel=True)
+    docs = Document.objects.filter_for_list(locale=request.LANGUAGE_CODE, toplevel=True)
     paginated_docs = paginate(request, docs, per_page=DOCUMENTS_PER_PAGE)
     context = {
-        'documents': paginated_docs,
-        'count': docs.count(),
-        'toplevel': True,
+        "documents": paginated_docs,
+        "toplevel": True,
     }
-    return render(request, 'wiki/list/documents.html', context)
+    return render(request, "wiki/list/documents.html", context)
 
 
+@ensure_wiki_domain
+@shared_cache_control
+@block_user_agents
 @require_GET
 @process_document_path
 @prevent_indexing
+@ratelimit(key="user_or_ip", rate="20/m", block=True)
 def revisions(request, document_slug, document_locale):
     """
     List all the revisions of a given document.
     """
-    locale = request.GET.get('locale', document_locale)
-    document = get_object_or_404(Document.objects
-                                         .select_related('current_revision'),
-                                 locale=locale,
-                                 slug=document_slug)
-    if document.current_revision is None:
-        raise Http404
+    locale = request.GET.get("locale", document_locale)
 
-    def get_previous(revisions):
-        for current_revision in revisions:
-            for previous_revision in revisions:
-                # we filter out all revisions that are not approved
-                # as that's the way the get_previous method does it as well
-                # also let's skip comparing the same revisions
-                if (not previous_revision.is_approved or
-                        current_revision.pk == previous_revision.pk):
-                    continue
-                # we stick to the first revision that we find
-                if previous_revision.created < current_revision.created:
-                    current_revision.previous_revision = previous_revision
-                    break
-        return revisions
+    # Load document with only fields for history display
+    doc_query = (
+        Document.objects.only(
+            "id",
+            "locale",
+            "slug",
+            "title",
+            "current_revision_id",
+            "parent__slug",
+            "parent__locale",
+        )
+        .select_related("parent")
+        .exclude(current_revision__isnull=True)
+        .filter(locale=locale, slug=document_slug)
+    )
+    document = get_object_or_404(doc_query)
 
-    per_page = request.GET.get('limit', 10)
+    # Process the requested page size
+    per_page = request.GET.get("limit", 10)
+    if not request.user.is_authenticated and per_page == "all":
+        return render(
+            request, "403.html", {"reason": "revisions_login_required"}, status=403
+        )
 
-    if not request.user.is_authenticated() and per_page == 'all':
-        return render(request, '403.html',
-                      {'reason': 'revisions_login_required'}, status=403)
-
-    # Grab revisions, but defer summary and content because they can lead to
-    # attempts to cache more than memcached allows.
-    revisions = MultiQuerySet(
-        (Revision.objects.filter(pk=document.current_revision.pk)
-                         .prefetch_related('creator', 'document')
-                         .transform(get_previous)),
-        (Revision.objects.filter(document=document)
-                         .order_by('-created', '-id')
-                         .exclude(pk=document.current_revision.pk)
-                         .prefetch_related('creator', 'document')
-                         .transform(get_previous))
+    # Get ordered revision IDs
+    revision_ids = list(
+        document.revisions.order_by("-created", "-id").values_list("id", flat=True)
     )
 
-    if not revisions.exists():
-        raise Http404
+    # Create pairs (this revision, previous revision)
+    revision_pairs = list(zip(revision_ids, revision_ids[1:] + [None]))
 
-    if per_page == 'all':
+    # Paginate the revision pairs, or use all of them
+    if per_page == "all":
         page = None
+        selected_revision_pairs = revision_pairs
     else:
         try:
             per_page = int(per_page)
         except ValueError:
             per_page = DOCUMENTS_PER_PAGE
 
-        page = paginate(request, revisions, per_page)
-        revisions = page.object_list
+        page = paginate(request, revision_pairs, per_page)
+        selected_revision_pairs = list(page.object_list)
+
+    # Include original English revision of the first translation
+    earliest_id, earliest_prev_id = selected_revision_pairs[-1]
+    if earliest_prev_id is None and document.parent:
+        earliest = Revision.objects.only("based_on").get(id=earliest_id)
+        if earliest.based_on is not None:
+            selected_revision_pairs[-1] = (earliest_id, earliest.based_on_id)
+            selected_revision_pairs.append((earliest.based_on_id, None))
+
+    # Gather revisions on this history page, restricted to display fields
+    selected_revision_ids = [rev_id for rev_id, _ in selected_revision_pairs]
+    previous_id = selected_revision_pairs[-1][1]
+    if previous_id is not None:
+        selected_revision_ids.append(previous_id)
+    selected_revisions = (
+        Revision.objects.only(
+            "id",
+            "slug",
+            "created",
+            "comment",
+            "document__slug",
+            "document__locale",
+            "creator__username",
+            "creator__is_active",
+        )
+        .select_related("document", "creator")
+        .filter(id__in=selected_revision_ids)
+    )
+    revisions = {rev.id: rev for rev in selected_revisions}
 
     context = {
-        'revisions': revisions,
-        'document': document,
-        'page': page,
+        "selected_revision_pairs": selected_revision_pairs,
+        "revisions": revisions,
+        "document": document,
+        "page": page,
     }
-    return render(request, 'wiki/list/revisions.html', context)
+    return render(request, "wiki/list/revisions.html", context)

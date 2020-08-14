@@ -1,40 +1,57 @@
-branches:
-    only:
-        - master
-cache:
-    apt: true
-    directories:
-        - $HOME/.cache/pip
-language: python
-python:
-    - "2.7"
-services:
-    - memcached
-    - elasticsearch
-env:
-    matrix:
-        - TOXENV=py27
-        - TOXENV=flake8
-        - TOXENV=docs
-    global:
-        - DJANGO_SETTINGS_MODULE=settings_travis
-        - DEBIAN_FRONTEND=noninteractive
-        - CFLAGS=-O0
-before_install:
-    - scripts/travis-install
-    - pip install -U pip
-install:
-    - pip install -r requirements/travis.txt
-    - if [[ $TOXENV == 'py27' ]]; then ansible-playbook -vvv --tags=mysql --connection=local --inventory-file=provisioning/inventory provisioning/travis.yml; fi
-script: tox -v
-after_failure:
-    - dmesg | tail
-after_success:
-    - codecov
-notifications:
-    irc:
-        channels:
-            - "irc.mozilla.org#mdndev"
-        on_success: always
-        on_failure: always
-        use_notice: true
+branches: master
+language: minimal
+git: { submodules: false }
+jobs:
+  include:
+    - stage: "Lint"
+      name: "General Lints"
+      script:
+        - "! git grep -n '^<<<<<<< '"  # Check for Git conflict markers
+
+    - name: "Python Lints"
+      language: python
+      python: 3.8
+      cache: pip
+      install:
+        - >-
+          pip install --disable-pip-version-check
+          black flake8 flake8-import-order
+      script:
+        - flake8 kuma docs tests
+        - black --check --diff kuma docs tests
+
+    - name: "JavaScript Lints"
+      language: node_js
+      node_js: 12
+      cache: yarn
+      script:
+        - scripts/ci-jslint
+        - scripts/ci-flow
+
+    - stage: "Test"
+      name: "Documentation Build"
+      language: python
+      python: 3.8
+      cache: pip
+      install:
+        - pip install -r docs/requirements.txt
+      script:
+        - sphinx-build -b html -d doctrees docs html
+
+    - name: "Dockerized Tests"
+      services: docker
+      git: { submodules: true }
+      env:
+        UID=0
+        DOCKER_COMPOSE_VERSION=1.23.2
+      cache:
+        directories:
+          - downloads
+          - build
+          - static
+      script:
+        - set -e
+        - scripts/ci-python
+        - scripts/ci-jest
+        - scripts/ci-localerefresh
+        - scripts/ci-codecovsubmit

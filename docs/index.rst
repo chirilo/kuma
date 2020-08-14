@@ -1,4 +1,10 @@
+
+====
+Kuma
+====
+
 .. include:: ../README.rst
+    :start-after: .. Omit badges from docs
 
 Contents:
 
@@ -6,17 +12,21 @@ Contents:
    :maxdepth: 2
 
    installation
-   vendor
    development
-   celery
-   email
-   elasticsearch
+   troubleshooting
+   tests
+   tests-functional
 
    feature-toggles
+   celery
+   elasticsearch
    localization
    ckeditor
-   tests
-   tests-ui
-   tests-performance
+   data
+   documentation
 
-   troubleshooting
+   docker
+   deploy
+
+   rendering
+   assets

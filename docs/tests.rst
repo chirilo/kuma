@@ -1,73 +1,131 @@
 ======================
-The Kuma Test Suite
+The Kuma test suite
 ======================
 
 Kuma has a fairly comprehensive Python test suite. Changes should not break
-tests--only change a test if there is a good reason to change the expected
-behavior--and new code should come with tests.
+tests. Only change a test if there is a good reason to change the expected
+behavior. New code should come with tests.
 
-Running the Test Suite
+Commands should be run inside the development environment, after ``make bash``.
+
+Setup
+=====
+
+Before you run the tests, you have to build assets::
+
+    make build-static
+
+Running the test suite
 ======================
-
 If you followed the steps in :doc:`the installation docs <installation>`,
 then all you should need to do to run the test suite is::
 
-    ./manage.py test
+    make test
 
-However, that doesn't provide the most sensible defaults. Here is a good
-command to alias to something short::
+The default options for running the test are in ``pytest.ini``. This is a
+good set of defaults.
 
-    ./manage.py test -s --noinput --logging-clear-handlers
+If you ever need to change the defaults, you can do so at the command
+line by running what the Make task does behind the scenes::
 
-The ``-s`` flag is important if you want to be able to drop into PDB from
-within tests.
+    py.test kuma
 
-Some tests will fail.  See `Running a Subset`_ below for running the subset
-that is expected to pass.
+Some helpful command line arguments to py.test (won't work on ``make test``):
 
-Some other helpful flags are:
-
-``-x``:
-  Fast fail. Exit immediately on failure. No need to run the whole test suite
-  if you already know something is broken.
 ``--pdb``:
-  Drop into PDB on an uncaught exception. (These show up as ``E`` or errors in
-  the test results, not ``F`` or failures.)
-``--pdb-fail``:
-  Drop into PDB on a test failure. This usually drops you right at the
-  assertion.
+  Drop into pdb on test failure.
 
+``--create-db``:
+  Create a new test database.
 
-Running a Subset
-----------------
+``--showlocals``:
+  Shows local variables in tracebacks on errors.
 
-You can run part of the test suite by specifying the apps you want to run,
-like::
+``--exitfirst``:
+  Exits on the first failure.
 
-    ./manage.py test kuma
+See ``py.test --help`` for more arguments.
 
-You can also exclude tests that match a regular expression with ``-e``::
+Running subsets of tests and specific tests
+-------------------------------------------
+There are a bunch of ways to specify a subset of tests to run:
 
-    ./manage.py test -e "search"
+* only tests marked with the 'spam' marker::
 
-To run the subset of tests that should pass::
+    py.test -m spam
 
-    ./manage.py test kuma
+* all the tests but those marked with the 'spam' marker::
 
-See the output of ``./manage.py test --help`` for more arguments.
+    py.test -m "not spam"
 
+* all the tests but the ones in ``kuma/core``::
 
-The Test Database
+    py.test --ignore kuma/core
+
+* all the tests that have "foobar" in their names::
+
+    py.test -k foobar
+
+* all the tests that don't have "foobar" in their names::
+
+    py.test -k "not foobar"
+
+* tests in a certain directory::
+
+    py.test kuma/wiki/
+
+* specific test::
+
+    py.test kuma/wiki/tests/test_views.py::RedirectTests::test_redirects_only_internal
+
+See http://pytest.org/latest/usage.html for more examples.
+
+Showing test coverage
+---------------------
+While running the tests you can record which part of the code base is covered
+by test cases. To show the results at the end of the test run use this command::
+
+    make coveragetest
+
+To generate an HTML coverage report, use::
+
+    make coveragetesthtml
+
+The test database
 -----------------
-
 The test suite will create a new database named ``test_%s`` where ``%s`` is
 whatever value you have for ``settings.DATABASES['default']['NAME']``. Make
 sure the user has ``ALL`` on the test database as well.
 
-Adding Tests
-============
 
-Code should be written so it can be tested, and then there should be tests for
+Markers
+=======
+See::
+
+    py.test --markers
+
+
+for the list of available markers.
+
+To add a marker, add it to the ``pytest.ini`` file.
+
+To use a marker, add a decorator to the class or function. Examples::
+
+    import pytest
+
+    @pytest.mark.spam
+    class SpamTests(TestCase):
+        ...
+
+    class OtherSpamTests(TestCase):
+        @pytest.mark.spam
+        def test_something(self):
+            ...
+
+
+Adding tests
+============
+Code should be written so that it can be tested, and then there should be tests for
 it.
 
 When adding code to an app, tests should be added in that app that cover the
@@ -75,18 +133,15 @@ new functionality. All apps have a ``tests`` module where tests should go. They
 will be discovered automatically by the test runner as long as the look like a
 test.
 
-
-Changing Tests
+Changing tests
 ==============
-
 Unless the current behavior, and thus the test that verifies that behavior is
 correct, is demonstrably wrong, don't change tests. Tests may be refactored as
-long as its clear that the result is the same.
+long as it's clear that the result is the same.
 
 
-Removing Tests
+Removing tests
 ==============
-
 On those rare, wonderful occasions when we get to remove code, we should remove
 the tests for it, as well.
 

@@ -1,38 +1,34 @@
-from StringIO import StringIO
-
-from django.contrib.auth.models import AnonymousUser
-from django.core.handlers.wsgi import WSGIRequest
 from django.test import RequestFactory
 
-from nose.tools import eq_
-
-from kuma.core.tests import KumaTestCase
-
-from ..context_processors import next_url
+from kuma.core.context_processors import next_url
+from kuma.core.urlresolvers import reverse
 
 
-def _make_request(path):
-    req = WSGIRequest({
-        'REQUEST_METHOD': 'GET',
-        'PATH_INFO': path,
-        'wsgi.input': StringIO()})
-    req.user = AnonymousUser()
-    return req
+def test_next_url_basic():
+    path = "/one/two"
+    request = RequestFactory().get(path)
+    assert path == next_url(request)["next_url"]()
 
 
-class TestNextUrl(KumaTestCase):
-    """
-    Tests that the next_url value is properly set,
-    including query string
-    """
-    rf = RequestFactory()
+def test_next_url_querystring():
+    path = "/one/two?something"
+    request = RequestFactory().get(path)
+    assert path == next_url(request)["next_url"]()
 
-    def test_basic(self):
-        path = '/one/two'
-        request = self.rf.get(path)
-        eq_(next_url(request)['next_url'], path)
 
-    def test_querystring(self):
-        path = '/one/two?something'
-        request = self.rf.get(path)
-        eq_(next_url(request)['next_url'], path)
+def test_next_url_with_next_querystring():
+    path = "/one/two?next=/foo/bar"
+    request = RequestFactory().get(path)
+    assert next_url(request)["next_url"]() == "/foo/bar"
+
+
+def test_next_url_with_next_querystring_but_remote():
+    path = "/one/two?next=http://foo/bar"
+    request = RequestFactory().get(path)
+    assert next_url(request)["next_url"]() is None
+
+
+def test_next_url_already_on_login_url(settings):
+    path = reverse(settings.LOGIN_URL)
+    request = RequestFactory().get(path)
+    assert next_url(request)["next_url"]() is None

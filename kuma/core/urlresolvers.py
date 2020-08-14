@@ -1,75 +1,77 @@
-import threading
-
 from django.conf import settings
-from django.test.client import RequestFactory
-from django.core.urlresolvers import reverse as django_reverse
-from django.utils.translation.trans_real import parse_accept_lang_header
+from django.core.exceptions import ImproperlyConfigured
+from django.urls import (
+    LocalePrefixPattern,
+    reverse as django_reverse,
+    URLResolver,
+)
+from django.utils import translation
+
+from .i18n import get_language
 
 
-# Thread-local storage for URL prefixes. Access with (get|set)_url_prefix.
-_locals = threading.local()
+class KumaLocalePrefixPattern(LocalePrefixPattern):
+    """
+    A prefix pattern for localized URLs that uses Kuma's case-sensitive locale
+    codes instead of Django's, which are all lowercase.
+
+    We do this via a customized get_language function in kuma/core/i18n.py.
+
+    NOTE: See upstream LocalePrefixPattern for Django 2.2 / 3.0:
+    https://github.com/django/django/blob/3.0/django/urls/resolvers.py#L288-L319
+    """
+
+    @property
+    def language_prefix(self):
+        language_code = get_language() or settings.LANGUAGE_CODE
+        return "%s/" % language_code
 
 
-def get_best_language(accept_lang):
-    """Given an Accept-Language header, return the best-matching language."""
+def i18n_patterns(*urls):
+    """
+    Add the language code prefix to every URL pattern within this function.
+    This may only be used in the root URLconf, not in an included URLconf.
 
-    ranked = parse_accept_lang_header(accept_lang)
-    return find_supported(ranked)
+    NOTE: Modified from i18n_patterns in Django 2.2 / 3.0, see:
+    https://github.com/django/django/blob/3.0/django/conf/urls/i18n.py#L8-L20
 
-
-def set_url_prefixer(prefixer):
-    """Set the Prefixer for the current thread."""
-    _locals.prefixer = prefixer
-
-
-def reset_url_prefixer():
-    """Set the Prefixer for the current thread."""
-    global _locals
-    _locals = threading.local()
-
-
-def get_url_prefixer():
-    """Get the Prefixer for the current thread, or None."""
-    return getattr(_locals, 'prefixer', None)
+    Modifications:
+    - Raises ImproperlyConfigured if settings.USE_I18N is False
+    - Forces prefix_default_language to True, so urls always include the locale
+    - Does not accept prefix_default_language as a kwarg, due to the above
+    - Uses our custom URL prefix pattern, to support our locale codes
+    """
+    if not settings.USE_I18N:
+        raise ImproperlyConfigured("Kuma requires settings.USE_I18N to be True.")
+    return [URLResolver(KumaLocalePrefixPattern(), list(urls))]
 
 
-def reverse(viewname, urlconf=None, args=None, kwargs=None, prefix=None,
-            current_app=None, force_locale=False, locale=None, unprefixed=False):
-    """Wraps Django's reverse to prepend the correct locale.
-
-    force_locale -- Ordinarily, if get_url_prefixer() returns None, we return
-        an unlocalized URL, which will be localized via redirect when visited.
-        Set force_locale to True to force the insertion of a default locale
-        when there is no set prefixer. If you are writing a test and simply
-        wish to avoid LocaleURLMiddleware's initial 301 when passing in an
-        unprefixed URL, it is probably easier to substitute LocalizingClient
-        for any uses of django.test.client.Client and forgo this kwarg.
-
-    locale -- By default, reverse prepends the current locale (if set) or
-        the default locale if force_locale == True. To override this behavior
-        and have it prepend a different locale, pass in the locale parameter
-        with the desired locale. When passing a locale, the force_locale is
-        not used and is implicitly True.
-
+def reverse(
+    viewname, urlconf=None, args=None, kwargs=None, current_app=None, locale=None
+):
+    """Wraps Django's reverse to prepend the requested locale.
+    Keyword Arguments:
+    * locale - Use this locale prefix rather than the current active locale.
+    Keyword Arguments passed to Django's reverse:
+    * viewname
+    * urlconf
+    * args
+    * kwargs
+    * current_app
     """
     if locale:
-        prefixer = Prefixer(locale=locale)
+        with translation.override(locale):
+            return django_reverse(
+                viewname,
+                urlconf=urlconf,
+                args=args,
+                kwargs=kwargs,
+                current_app=current_app,
+            )
     else:
-        prefixer = get_url_prefixer()
-        if unprefixed:
-            prefixer = None
-        elif not prefixer and force_locale:
-            prefixer = Prefixer()
-
-    if prefixer:
-        prefix = prefix or '/'
-    url = django_reverse(viewname, urlconf=urlconf, args=args, kwargs=kwargs,
-                         prefix=prefix, current_app=current_app)
-
-    if prefixer:
-        return prefixer.fix(url)
-    else:
-        return url
+        return django_reverse(
+            viewname, urlconf=urlconf, args=args, kwargs=kwargs, current_app=current_app
+        )
 
 
 def find_supported(ranked):
@@ -80,7 +82,7 @@ def find_supported(ranked):
         if lang in langs:
             return langs[lang]
         # Add derived language tags to the end of the list as a fallback.
-        pre = '-'.join(lang.split('-')[0:-1])
+        pre = "-".join(lang.split("-")[0:-1])
         if pre:
             ranked.append((pre, None))
     # Couldn't find any acceptable locale.
@@ -93,10 +95,10 @@ def split_path(path):
 
     locale will be empty if it isn't found.
     """
-    path = path.lstrip('/')
+    path = path.lstrip("/")
 
     # Use partition instead of split since it always returns 3 parts
-    first, _, rest = path.partition('/')
+    first, _, rest = path.partition("/")
 
     # Treat locale as a single-item ranked list.
     lang = find_supported([(first, 1.0)])
@@ -104,47 +106,4 @@ def split_path(path):
     if lang:
         return lang, rest
     else:
-        return '', path
-
-
-class Prefixer(object):
-    def __init__(self, request=None, locale=None):
-        """If request is omitted, fall back to a default locale."""
-        self.request = request or RequestFactory(REQUEST_METHOD='bogus').request()
-        self.locale, self.shortened_path = split_path(self.request.path_info)
-        if locale:
-            self.locale = locale
-
-    def get_language(self):
-        """
-        Return a locale code we support on the site using the
-        user's Accept-Language header to determine which is best. This
-        mostly follows the RFCs but read bug 439568 for details.
-        """
-        if 'lang' in self.request.GET:
-            lang = self.request.GET['lang'].lower()
-            if lang in settings.LANGUAGE_URL_MAP:
-                return settings.LANGUAGE_URL_MAP[lang]
-
-        if self.request.META.get('HTTP_ACCEPT_LANGUAGE'):
-            best = get_best_language(
-                self.request.META['HTTP_ACCEPT_LANGUAGE'])
-            if best:
-                return best
-
-        return settings.LANGUAGE_CODE
-
-    def fix(self, path):
-        path = path.lstrip('/')
-        url_parts = [self.request.META['SCRIPT_NAME']]
-        if path.endswith('/'):
-            check_path = path
-        else:
-            check_path = path + '/'
-        if not check_path.startswith(settings.LANGUAGE_URL_IGNORED_PATHS):
-            locale = self.locale if self.locale else self.get_language()
-            url_parts.append(locale)
-
-        url_parts.append(path)
-
-        return '/'.join(url_parts)
+        return "", path

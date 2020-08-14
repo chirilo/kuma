@@ -1,70 +1,70 @@
-# -*- coding: utf-8 -*-
 import newrelic.agent
-
-from django.core.exceptions import PermissionDenied
-from django.http import HttpResponseRedirect
-from django.shortcuts import render
-
-from constance import config
+from django.conf import settings
+from django.shortcuts import redirect, render
+from django.views.decorators.cache import never_cache
 
 from kuma.attachments.forms import AttachmentRevisionForm
-from kuma.attachments.models import Attachment
-from kuma.core.decorators import never_cache, login_required
+from kuma.core.decorators import block_user_agents, ensure_wiki_domain, login_required
 from kuma.core.urlresolvers import reverse
 
-from ..constants import (TEMPLATE_TITLE_PREFIX,
-                         REVIEW_FLAG_TAGS_DEFAULT)
+from ..constants import DEV_DOC_REQUEST_FORM, REVIEW_FLAG_TAGS_DEFAULT
 from ..decorators import check_readonly, prevent_indexing
-from ..forms import DocumentForm, RevisionForm, RevisionValidationForm
+from ..forms import DocumentForm, RevisionForm
 from ..models import Document, Revision
-from .utils import save_revision_and_notify
 
 
+@ensure_wiki_domain
+@newrelic.agent.function_trace()
+@never_cache
+@block_user_agents
 @login_required
 @check_readonly
 @prevent_indexing
-@never_cache
-@newrelic.agent.function_trace()
-def new_document(request):
-    """Create a new wiki document."""
+def create(request):
+    """
+    Create a new wiki page, which is a document and a revision.
+    """
+    initial_slug = request.GET.get("slug", "")
 
-    initial_slug = request.GET.get('slug', '')
-    initial_title = initial_slug.replace('_', ' ')
+    # TODO: Integrate this into a new exception-handling middleware
+    if not request.user.has_perm("wiki.add_document"):
+        context = {
+            "reason": "create-page",
+            "request_page_url": DEV_DOC_REQUEST_FORM,
+            "email_address": settings.EMAIL_LIST_MDN_ADMINS,
+        }
+        return render(request, "403-create-page.html", context=context, status=403)
 
-    initial_parent_id = ''
+    # a fake title based on the initial slug passed via a query parameter
+    initial_title = initial_slug.replace("_", " ")
+
+    # in case we want to create a sub page under a different document
     try:
-        initial_parent_id = int(request.GET.get('parent', ''))
-    except ValueError:
-        pass
+        # If a parent ID is provided via GET, confirm it exists
+        initial_parent_id = int(request.GET.get("parent", ""))
+        parent_doc = Document.objects.get(pk=initial_parent_id)
+        parent_slug = parent_doc.slug
+        parent_path = parent_doc.get_absolute_url()
+    except (ValueError, Document.DoesNotExist):
+        initial_parent_id = parent_slug = parent_path = ""
 
-    clone_id = None
+    # in case we want to create a new page by cloning an existing document
     try:
-        clone_id = int(request.GET.get('clone', ''))
+        clone_id = int(request.GET.get("clone", ""))
     except ValueError:
-        pass
+        clone_id = None
 
-    if not Document.objects.allows_add_by(request.user, initial_slug):
-        # Try to head off disallowed Template:* creation, right off the bat
-        raise PermissionDenied
+    context = {
+        "attachment_form": AttachmentRevisionForm(),
+        "parent_path": parent_path,
+        "parent_slug": parent_slug,
+    }
 
-    is_template = initial_slug.startswith(TEMPLATE_TITLE_PREFIX)
-
-    # If a parent ID is provided via GET, confirm it exists
-    parent_slug = parent_path = ''
-
-    if initial_parent_id:
-        try:
-            parent_doc = Document.objects.get(pk=initial_parent_id)
-            parent_slug = parent_doc.slug
-            parent_path = parent_doc.get_absolute_url()
-        except Document.DoesNotExist:
-            pass
-
-    if request.method == 'GET':
+    if request.method == "GET":
 
         initial_data = {}
-        initial_html = ''
-        initial_tags = ''
+        initial_html = ""
+        initial_tags = ""
         initial_toc = Revision.TOC_DEPTH_H4
 
         if clone_id:
@@ -82,85 +82,59 @@ def new_document(request):
                 pass
 
         if parent_slug:
-            initial_data['parent_topic'] = initial_parent_id
+            initial_data["parent_topic"] = initial_parent_id
 
         if initial_slug:
-            initial_data['title'] = initial_title
-            initial_data['slug'] = initial_slug
+            initial_data["title"] = initial_title
+            initial_data["slug"] = initial_slug
 
-        if is_template:
-            review_tags = ('template',)
-        else:
-            review_tags = REVIEW_FLAG_TAGS_DEFAULT
+        review_tags = REVIEW_FLAG_TAGS_DEFAULT
 
-        doc_form = DocumentForm(initial=initial_data)
+        doc_form = DocumentForm(initial=initial_data, parent_slug=parent_slug)
 
-        rev_form = RevisionForm(initial={
-            'slug': initial_slug,
-            'title': initial_title,
-            'content': initial_html,
-            'review_tags': review_tags,
-            'tags': initial_tags,
-            'toc_depth': initial_toc
-        })
+        initial = {
+            "slug": initial_slug,
+            "title": initial_title,
+            "content": initial_html,
+            "review_tags": review_tags,
+            "tags": initial_tags,
+            "toc_depth": initial_toc,
+        }
+        rev_form = RevisionForm(request=request, initial=initial)
 
-        allow_add_attachment = (
-            Attachment.objects.allow_add_attachment_by(request.user))
-        context = {
-            'is_template': is_template,
-            'parent_slug': parent_slug,
-            'parent_id': initial_parent_id,
-            'document_form': doc_form,
-            'revision_form': rev_form,
-            'WIKI_DOCUMENT_TAG_SUGGESTIONS': config.WIKI_DOCUMENT_TAG_SUGGESTIONS,
-            'initial_tags': initial_tags,
-            'allow_add_attachment': allow_add_attachment,
-            'attachment_form': AttachmentRevisionForm(),
-            'parent_path': parent_path}
+        context.update(
+            {
+                "parent_id": initial_parent_id,
+                "document_form": doc_form,
+                "revision_form": rev_form,
+                "initial_tags": initial_tags,
+            }
+        )
 
-        return render(request, 'wiki/new_document.html', context)
-
-    post_data = request.POST.copy()
-    posted_slug = post_data['slug']
-    post_data.update({'locale': request.locale})
-    if parent_slug:
-        post_data.update({'parent_topic': initial_parent_id})
-        post_data.update({'slug': parent_slug + '/' + post_data['slug']})
-
-    doc_form = DocumentForm(post_data)
-    rev_form = RevisionValidationForm(request.POST.copy())
-    rev_form.parent_slug = parent_slug
-
-    if doc_form.is_valid() and rev_form.is_valid():
-        rev_form = RevisionForm(post_data)
-        if rev_form.is_valid():
-            slug = doc_form.cleaned_data['slug']
-            if not Document.objects.allows_add_by(request.user, slug):
-                raise PermissionDenied
-
-            doc = doc_form.save(None)
-            save_revision_and_notify(rev_form, request, doc)
-            if doc.current_revision.is_approved:
-                view = 'wiki.document'
-            else:
-                view = 'wiki.document_revisions'
-            return HttpResponseRedirect(reverse(view, args=[doc.slug]))
-        else:
-            doc_form.data['slug'] = posted_slug
     else:
-        doc_form.data['slug'] = posted_slug
 
-    allow_add_attachment = (
-        Attachment.objects.allow_add_attachment_by(request.user))
+        submitted_data = request.POST.copy()
+        posted_slug = submitted_data["slug"]
+        submitted_data["locale"] = request.LANGUAGE_CODE
+        if parent_slug:
+            submitted_data["parent_topic"] = initial_parent_id
 
-    context = {
-        'is_template': is_template,
-        'document_form': doc_form,
-        'revision_form': rev_form,
-        'WIKI_DOCUMENT_TAG_SUGGESTIONS': config.WIKI_DOCUMENT_TAG_SUGGESTIONS,
-        'allow_add_attachment': allow_add_attachment,
-        'attachment_form': AttachmentRevisionForm(),
-        'parent_slug': parent_slug,
-        'parent_path': parent_path,
-    }
-    return render(request, 'wiki/new_document.html', context)
+        doc_form = DocumentForm(data=submitted_data, parent_slug=parent_slug)
+        rev_form = RevisionForm(
+            request=request, data=submitted_data, parent_slug=parent_slug
+        )
+
+        if doc_form.is_valid() and rev_form.is_valid():
+            doc = doc_form.save(parent=None)
+            rev_form.save(doc)
+            if doc.current_revision.is_approved:
+                view = "wiki.document"
+            else:
+                view = "wiki.document_revisions"
+            return redirect(reverse(view, args=[doc.slug]))
+        else:
+            doc_form.data["slug"] = posted_slug
+
+        context.update({"document_form": doc_form, "revision_form": rev_form})
+
+    return render(request, "wiki/create.html", context)

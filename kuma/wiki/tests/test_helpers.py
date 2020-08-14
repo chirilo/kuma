@@ -1,137 +1,142 @@
-# -*- coding: utf-8 -*-
-import mock
-from nose.tools import eq_
+from datetime import datetime
 
-from django.contrib.sites.models import Site
+import pytest
+from django.template import TemplateDoesNotExist
+from pyquery import PyQuery as pq
 
-from kuma.core.cache import memcache
-from kuma.users.tests import UserTestCase
-from . import document, revision, WikiTestCase
-from ..helpers import (absolutify, document_zone_management_links,
-                       revisions_unified_diff, tojson)
-from ..models import DocumentZone
-
-
-class HelpTests(WikiTestCase):
-
-    def test_tojson(self):
-        eq_(tojson({'title': '<script>alert("Hi!")</script>'}),
-            '{"title": "&lt;script&gt;alert(&quot;Hi!&quot;)&lt;/script&gt;"}')
-
-    @mock.patch.object(Site.objects, 'get_current')
-    def test_absolutify(self, get_current):
-        get_current.return_value.domain = 'testserver'
-
-        eq_(absolutify(''), 'https://testserver/')
-        eq_(absolutify('/'), 'https://testserver/')
-        eq_(absolutify('//'), 'https://testserver/')
-        eq_(absolutify('/foo/bar'), 'https://testserver/foo/bar')
-        eq_(absolutify('http://domain.com'), 'http://domain.com')
-
-        site = Site(domain='otherserver')
-        eq_(absolutify('/woo', site), 'https://otherserver/woo')
-
-        eq_(absolutify('/woo?var=value'), 'https://testserver/woo?var=value')
-        eq_(absolutify('/woo?var=value#fragment'),
-            'https://testserver/woo?var=value#fragment')
+from ..models import Document, Revision
+from ..templatetags.jinja_helpers import (
+    absolutify,
+    include_svg,
+    revisions_unified_diff,
+    selector_content_find,
+    tojson,
+    wiki_url,
+)
 
 
-class RevisionsUnifiedDiffTests(UserTestCase, WikiTestCase):
-
-    def test_from_revision_none(self):
-        rev = revision()
-        try:
-            diff = revisions_unified_diff(None, rev)
-        except AttributeError:
-            self.fail("Should not throw AttributeError")
-        eq_("Diff is unavailable.", diff)
-
-    def test_from_revision_non_ascii(self):
-        doc1 = document(title=u'Gänsefüßchen', save=True)
-        rev1 = revision(document=doc1, content=u'spam', save=True)
-        doc2 = document(title=u'Außendienstüberwachlösung', save=True)
-        rev2 = revision(document=doc2, content=u'eggs', save=True)
-        try:
-            revisions_unified_diff(rev1, rev2)
-        except UnicodeEncodeError:
-            self.fail("Should not throw UnicodeEncodeError")
+def test_tojson():
+    """tojson converts dicts to JSON objects with escaping."""
+    output = tojson({"title": '<script>alert("Hi!")</script>'})
+    expected = '{"title": "&lt;script&gt;alert(&quot;Hi!&quot;)' '&lt;/script&gt;"}'
+    assert output == expected
 
 
-class DocumentZoneTests(UserTestCase, WikiTestCase):
-    """Tests for DocumentZone helpers"""
+@pytest.mark.parametrize(
+    "path,abspath",
+    (
+        ("", "https://testserver/"),
+        ("/", "https://testserver/"),
+        ("//", "https://testserver/"),
+        ("/foo/bar", "https://testserver/foo/bar"),
+        ("http://domain.com", "http://domain.com"),
+        ("/woo?var=value", "https://testserver/woo?var=value"),
+        ("/woo?var=value#fragment", "https://testserver/woo?var=value#fragment"),
+    ),
+)
+def test_absolutify(settings, path, abspath):
+    """absolutify adds the current site to paths without domains."""
+    settings.SITE_URL = "https://testserver"
+    assert absolutify(path) == abspath
 
-    def setUp(self):
-        super(DocumentZoneTests, self).setUp()
 
-        self.root_links_content = """
-            <p>Links content</p>
-        """
-        self.root_content = """
-            <h4 id="links">Links</h4>
-            %s
-        """ % (self.root_links_content)
+def test_absolutify_dev(settings):
+    """absolutify uses http in development."""
+    settings.SITE_URL = "http://localhost:8000"
+    assert absolutify("") == "http://localhost:8000/"
 
-        root_rev = revision(title='ZoneRoot',
-                            slug='ZoneRoot',
-                            content=self.root_content,
-                            is_approved=True,
-                            save=True)
-        self.root_doc = root_rev.document
-        self.root_doc.rendered_html = self.root_content
-        self.root_doc.save()
 
-        self.root_zone = DocumentZone(document=self.root_doc)
-        self.root_zone.save()
+def test_include_svg_invalid_path():
+    """An invalid SVG path raises an exception."""
+    with pytest.raises(TemplateDoesNotExist):
+        include_svg("invalid.svg")
 
-        sub_rev = revision(title='SubPage',
-                           slug='SubPage',
-                           content='This is a subpage',
-                           is_approved=True,
-                           save=True)
-        self.sub_doc = sub_rev.document
-        self.sub_doc.parent_topic = self.root_doc
-        self.sub_doc.rendered_html = sub_rev.content
-        self.sub_doc.save()
 
-        self.sub_sub_links_content = """
-            <p>Sub-page links content</p>
-        """
-        self.sub_sub_content = """
-            <h4 id="links">Links</h4>
-            %s
-        """ % (self.sub_sub_links_content)
+def test_include_svg_no_title():
+    """If the title is not given, the SVG title is not changed."""
+    no_title = include_svg("includes/icons/social/twitter.svg")
+    svg = pq(no_title, namespaces={"svg": "http://www.w3.org/2000/svg"})
+    svg_title = svg("svg|title")
+    assert svg_title.text() == "Twitter"
 
-        sub_sub_rev = revision(title='SubSubPage',
-                               slug='SubSubPage',
-                               content='This is a subpage',
-                               is_approved=True,
-                               save=True)
-        self.sub_sub_doc = sub_sub_rev.document
-        self.sub_sub_doc.parent_topic = self.sub_doc
-        self.sub_sub_doc.rendered_html = self.sub_sub_content
-        self.sub_sub_doc.save()
 
-        other_rev = revision(title='otherPage',
-                             slug='otherPage',
-                             content='This is an other page',
-                             is_approved=True,
-                             save=True)
-        self.other_doc = other_rev.document
-        self.other_doc.save()
-        memcache.clear()
+@pytest.mark.parametrize("title", ("New Title", "Nuevo Título"))
+def test_include_svg_replace_title(title):
+    """The SVG title can be replaced."""
+    new_title = include_svg("includes/icons/social/twitter.svg", title)
+    svg = pq(new_title, namespaces={"svg": "http://www.w3.org/2000/svg"})
+    svg_title = svg("svg|title")
+    assert svg_title.text() == title
 
-    def test_document_zone_links(self):
-        admin = self.user_model.objects.filter(is_superuser=True)[0]
-        random = self.user_model.objects.filter(is_superuser=False)[0]
-        cases = [
-            (admin, self.root_doc, False, True),
-            (random, self.root_doc, False, False),
-            (admin, self.sub_doc, True, True),
-            (random, self.sub_doc, False, False),
-            (admin, self.other_doc, True, False),
-            (random, self.other_doc, False, False),
-        ]
-        for (user, doc, add, change) in cases:
-            result_links = document_zone_management_links(user, doc)
-            eq_(add, result_links['add'] is not None, (user, doc))
-            eq_(change, result_links['change'] is not None)
+
+def test_include_svg_add_title_title_id():
+    """The SVG title and id attribute can be added."""
+    title, title_id = "New Title", "title-id"
+    new_svg = include_svg("includes/icons/social/twitter.svg", title, title_id)
+    new_svg = pq(new_svg, namespaces={"svg": "http://www.w3.org/2000/svg"})
+    svg_title = new_svg("svg|title")
+    svg_title_id = new_svg("svg|title").attr["id"]
+    assert svg_title.text() == title
+    assert svg_title_id == title_id
+
+
+def test_revisions_unified_diff_none(root_doc):
+    """Passing a None revision does not raise an AttributeError."""
+    diff = revisions_unified_diff(None, root_doc.current_revision)
+    assert diff == "Diff is unavailable."
+
+
+def test_revisions_unified_diff_non_ascii(wiki_user):
+    """Documents with non-ASCII titles do not have Unicode errors in diffs."""
+    title1 = "Gänsefüßchen"
+    doc1 = Document.objects.create(locale="en-US", slug=title1, title=title1)
+    rev1 = Revision.objects.create(
+        document=doc1,
+        creator=wiki_user,
+        content="<p>%s started...</p>" % title1,
+        title=title1,
+        created=datetime(2018, 11, 21, 18, 39),
+    )
+
+    title2 = "Außendienstüberwachlösung"
+    doc2 = Document.objects.create(locale="en-US", slug=title2, title=title2)
+    rev2 = Revision.objects.create(
+        document=doc2,
+        creator=wiki_user,
+        content="<p>%s started...</p>" % title2,
+        title=title1,
+        created=datetime(2018, 11, 21, 18, 41),
+    )
+
+    revisions_unified_diff(rev1, rev2)  # No UnicodeEncodeError
+
+
+def test_selector_content_find_not_found_returns_empty_string(root_doc):
+    """When the ID is not in the content, return an empty string."""
+    root_doc.rendered_html = root_doc.current_revision.content
+    content = selector_content_find(root_doc, "summary")
+    assert content == ""
+
+
+def test_selector_content_find_bad_selector_returns_empty_string(root_doc):
+    """When the ID is invalid, return an empty string."""
+    root_doc.rendered_html = root_doc.current_revision.content
+    content = selector_content_find(root_doc, ".")
+    assert content == ""
+
+
+@pytest.mark.parametrize(
+    "path, expected",
+    (
+        ("MDN/Getting_started", "/en-US/docs/MDN/Getting_started"),
+        (
+            "MDN/Getting_started#Option_1_I_like_words",
+            "/en-US/docs/MDN/Getting_started#Option_1_I_like_words",
+        ),
+    ),
+    ids=("simple", "fragment"),
+)
+def test_wiki_url(path, expected):
+    """Test wiki_url, without client languages."""
+    out = wiki_url(path)
+    assert out == expected

@@ -11,21 +11,28 @@
     },
     {
         "fields": {
-            "name": "template-editors",
+            "name": "Page Creators",
             "permissions": [
-                118,
-                119
+                ["add_document", "wiki", "document"]
             ]
         },
         "model": "auth.group",
-        "pk": 1
+        "pk": 2
+    },
+    {
+        "fields": {
+            "name": "Known Authors",
+            "permissions": []
+        },
+        "model": "auth.group",
+        "pk": 4
     },
     {
         "fields": {
             "date_joined": "2011-06-03 16:12:08",
             "email": "testuser@test.com",
             "first_name": "Test",
-            "groups": [],
+            "groups": [2],
             "is_active": true,
             "is_staff": false,
             "is_superuser": false,
@@ -35,7 +42,6 @@
             "user_permissions": [],
             "username": "testuser",
             "bio": "I like to test things.",
-            "content_flagging_email": false,
             "fullname": "Test User",
             "homepage": "http://testuser.com/",
             "irc_nickname": "testuser",
@@ -51,16 +57,16 @@
     {
         "fields": {
             "user": 7,
-            "uid": "testuser@test.com",
-            "provider": "persona",
+            "uid": "7",
+            "provider": "github",
             "last_login": "2011-06-03 16:12:08",
             "date_joined": "2011-06-03 16:12:08",
-            "extra_data": {"status": "okay",
-                            "audience": "https://developer-local.allizom.org",
-                            "expires": 1408466018450,
-                            "email": "testuser@test.com",
-                            "issuer": "gmail.login.persona.org"}
-
+            "extra_data": {
+                "login": "testuser7",
+                "id": 7,
+                "email": "testuser@test.com",
+                "html_url": "https://github.com/testuser7"
+            }
         },
         "model": "socialaccount.socialaccount",
         "pk": 7
@@ -80,7 +86,7 @@
             "date_joined": "2011-06-03 16:12:08",
             "email": "testuser2@test.com",
             "first_name": "Test2",
-            "groups": [],
+            "groups": [2],
             "is_active": true,
             "is_staff": false,
             "is_superuser": false,
@@ -90,7 +96,6 @@
             "user_permissions": [],
             "username": "testuser2",
             "bio": "I like to test things.2",
-            "content_flagging_email": false,
             "fullname": "Test User2",
             "homepage": "http://testuser2.com/",
             "irc_nickname": "testuser2",
@@ -105,16 +110,16 @@
     {
         "fields": {
             "user": 8,
-            "uid": "testuser2@test.com",
-            "provider": "persona",
+            "uid": "8",
+            "provider": "github",
             "last_login": "2011-06-03 16:12:08",
             "date_joined": "2011-06-03 16:12:08",
-            "extra_data": {"status": "okay",
-                            "audience": "https://developer-local.allizom.org",
-                            "expires": 1408466018450,
-                            "email": "testuser2@test.com",
-                            "issuer": "gmail.login.persona.org"}
-
+            "extra_data": {
+                "login": "testuser8",
+                "id": 8,
+                "email": "testuser2@test.com",
+                "html_url": "https://github.com/testuser8"
+            }
         },
         "model": "socialaccount.socialaccount",
         "pk": 8
@@ -166,7 +171,7 @@
             "date_joined": "2011-06-03 16:12:08",
             "email": "testuser01@test.com",
             "first_name": "Test",
-            "groups": [],
+            "groups": [2, 4],
             "is_active": true,
             "is_staff": false,
             "is_superuser": false,
@@ -176,7 +181,6 @@
             "user_permissions": [],
             "username": "testuser01",
             "bio": "I like to test things.01",
-            "content_flagging_email": false,
             "fullname": "Test User01",
             "homepage": "http://testuser01.com/",
             "irc_nickname": "testuser01",
@@ -202,12 +206,76 @@
             "password": "sha1$015f3$d7a6885afbb3e3ae453f1c68ab205fa0a24c3488",
             "user_permissions": [],
             "username": "admin",
-            "content_flagging_email": false,
             "homepage": "http://adminuser.com/",
             "location": "Adminville",
             "timezone": "Asia/Kolkata"
         },
         "model": "users.user",
         "pk": 10
+    },
+    {
+        "fields": {
+            "date_joined": "2017-06-03 16:12:08",
+            "email": "gogl@test.com",
+            "first_name": "Gogl",
+            "groups": [2],
+            "is_active": true,
+            "is_staff": false,
+            "is_superuser": false,
+            "last_login": "2011-06-03 16:12:08",
+            "last_name": "Goggler",
+            "password": "sha1$015f3$d7a6885afbb3e3ae453f1c68ab205fa0a24c3488",
+            "user_permissions": [],
+            "username": "gogol",
+            "bio": "I like to test things.2",
+            "fullname": "Gogol Goggler",
+            "homepage": "http://google.com/",
+            "irc_nickname": "gogol",
+            "location": "MV",
+            "organization": "Web Testers Anonymous23",
+            "timezone": "US/Pacific",
+            "title": "Dr.2"
+        },
+        "model": "users.user",
+        "pk": 23
+    },
+    {
+        "fields": {
+            "user": 23,
+            "uid": "23",
+            "provider": "google",
+            "last_login": "2018-06-03 16:12:08",
+            "date_joined": "2017-06-03 16:12:08",
+            "extra_data": {
+                "login": "gogolsocial",
+                "id": 23,
+                "email": "gogol@test.com",
+                "html_url": "https://google.com/gogol"
+            }
+        },
+        "model": "socialaccount.socialaccount",
+        "pk": 23
+    },
+    {
+        "fields": {
+            "provider": "github",
+            "name": "GitHub",
+            "client_id": "fake_github_id",
+            "secret": "fake_secret_key",
+            "sites": [1]
+        },
+        "model": "socialaccount.socialapp",
+        "pk": 1
+    },
+    {
+        "fields": {
+            "provider": "google",
+            "name": "Google",
+            "client_id": "fake_id",
+            "secret": "fake_secret_key",
+            "sites": [1]
+        },
+        "model": "socialaccount.socialapp",
+        "pk": 2
     }
 ]

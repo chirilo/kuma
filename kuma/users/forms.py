@@ -1,140 +1,20 @@
-import operator
-import time
-
 from django import forms
 from django.conf import settings
-from django.http import HttpResponseServerError
-
-import basket
-from basket.base import BasketException
-from basket.errors import BASKET_UNKNOWN_EMAIL
-from constance import config
-from product_details import product_details
+from django.utils.translation import gettext_lazy as _
 from sundial.forms import TimezoneChoiceField
 from sundial.zones import COMMON_GROUPED_CHOICES
-from taggit.utils import parse_tags
-from tower import ugettext_lazy as _
 
-from .constants import (USERNAME_CHARACTERS, USERNAME_REGEX,
-                        USERNAME_LEGACY_REGEX)
+
+from .constants import USERNAME_CHARACTERS, USERNAME_LEGACY_REGEX, USERNAME_REGEX
 from .models import User
-
-PRIVACY_REQUIRED = _(u'You must agree to the privacy policy.')
-
-
-class NewsletterForm(forms.Form):
-    """
-    The base form class to be used for the signup form below as well as
-    in standalone mode on the user profile editing page.
-
-    It populates the country choices with the product_details database
-    depending on the current request's locale.
-    """
-    FORMAT_HTML = 'html'
-    FORMAT_TEXT = 'text'
-    FORMAT_CHOICES = [
-        (FORMAT_HTML, _(u'HTML')),
-        (FORMAT_TEXT, _(u'Plain text')),
-    ]
-    newsletter = forms.BooleanField(label=_(u'Send me the newsletter'),
-                                    required=False)
-    format = forms.ChoiceField(label=_(u'Preferred format'),
-                               choices=FORMAT_CHOICES,
-                               initial=FORMAT_HTML,
-                               widget=forms.RadioSelect(attrs={'id': 'format'}),
-                               required=False)
-    agree = forms.BooleanField(label=_(u'I agree'),
-                               required=False,
-                               error_messages={'required': PRIVACY_REQUIRED})
-    country = forms.ChoiceField(label=_(u'Your country'),
-                                choices=[],
-                                required=False)
-
-    def __init__(self, locale, already_subscribed, *args, **kwargs):
-        super(NewsletterForm, self).__init__(*args, **kwargs)
-        self.already_subscribed = already_subscribed
-
-        regions = product_details.get_regions(locale)
-        regions = sorted(regions.iteritems(), key=operator.itemgetter(1))
-
-        lang = country = locale.lower()
-        if '-' in lang:
-            lang, country = lang.split('-', 1)
-
-        self.fields['country'].choices = regions
-        self.fields['country'].initial = country
-
-    def clean(self):
-        cleaned_data = super(NewsletterForm, self).clean()
-        if cleaned_data['newsletter'] and not self.already_subscribed:
-            if cleaned_data['agree']:
-                cleaned_data['subscribe_needed'] = True
-            else:
-                raise forms.ValidationError(PRIVACY_REQUIRED)
-        return cleaned_data
-
-    def signup(self, request, user):
-        """
-        Used by allauth when successfully signing up a user. This will
-        be ignored if this form is used standalone.
-        """
-        self.subscribe(request, user.email)
-
-    @classmethod
-    def is_subscribed(cls, email):
-        subscription_details = cls.get_subscription_details(email)
-        return (settings.BASKET_APPS_NEWSLETTER in
-                subscription_details['newsletters']
-                if subscription_details
-                else False)
-
-    @classmethod
-    def get_subscription_details(cls, email):
-        subscription_details = None
-        try:
-            api_key = config.BASKET_API_KEY
-            subscription_details = basket.lookup_user(email=email,
-                                                      api_key=api_key)
-        except BasketException, e:
-            if e.code == BASKET_UNKNOWN_EMAIL:
-                # pass - unknown email is just a new subscriber
-                pass
-        return subscription_details
-
-    def subscribe(self, request, email):
-        subscription_details = self.get_subscription_details(email)
-        if 'subscribe_needed' in self.cleaned_data:
-            optin = 'N'
-            if request.locale == 'en-US':
-                optin = 'Y'
-            basket_data = {
-                'email': email,
-                'newsletters': settings.BASKET_APPS_NEWSLETTER,
-                'country': self.cleaned_data['country'],
-                'format': self.cleaned_data['format'],
-                'lang': request.locale,
-                'optin': optin,
-                'source_url': request.build_absolute_uri()
-            }
-            for retry in range(config.BASKET_RETRIES):
-                try:
-                    result = basket.subscribe(**basket_data)
-                    if result.get('status') != 'error':
-                        break
-                except BasketException:
-                    if retry == config.BASKET_RETRIES:
-                        return HttpResponseServerError()
-                    else:
-                        time.sleep(config.BASKET_RETRY_WAIT * retry)
-        elif subscription_details:
-            basket.unsubscribe(subscription_details['token'], email,
-                               newsletters=settings.BASKET_APPS_NEWSLETTER)
+from .tasks import send_recovery_email
 
 
 class UserBanForm(forms.Form):
     """
     The form used in the view that enables admins to ban users.
     """
+
     reason = forms.CharField(widget=forms.Textarea)
 
 
@@ -143,136 +23,200 @@ class UserEditForm(forms.ModelForm):
     The main form to edit user profile data.
 
     It dynamically adds a bunch of fields for maintaining information
-    about a user's websites and handles expertise and interests fields
-    specially.
+    about a user's websites
     """
+
     timezone = TimezoneChoiceField(
-        label=_(u'Timezone'),
+        label=_("Timezone"),
         initial=settings.TIME_ZONE,
         choices=COMMON_GROUPED_CHOICES,
         required=False,
     )
-    beta = forms.BooleanField(
-        label=_(u'Beta tester'),
-        required=False,
-    )
-    interests = forms.CharField(
-        label=_(u'Interests'),
-        max_length=255,
-        required=False,
-        widget=forms.TextInput(attrs={'class': 'tags'}),
-    )
-    expertise = forms.CharField(
-        label=_(u'Expertise'),
-        max_length=255,
-        required=False,
-        widget=forms.TextInput(attrs={'class': 'tags'}),
-    )
+    beta = forms.BooleanField(label=_("Beta tester"), required=False,)
     username = forms.RegexField(
-        label=_(u'Username'),
+        label=_("Username"),
         regex=USERNAME_REGEX,
         max_length=30,
         required=False,
-        error_message=USERNAME_CHARACTERS,
-    )
-    website_url = forms.CharField(
-        label=_('Website'),
-        required=False,
-        validators=[User.WEBSITE_VALIDATORS['website']],
-        widget=forms.TextInput(attrs={
-            'placeholder': 'http://',
-            'data-fa-icon': 'icon-link',
-        }),
+        error_messages={"invalid": USERNAME_CHARACTERS},
     )
     twitter_url = forms.CharField(
-        label=_('Twitter'),
+        label=_("Twitter"),
         required=False,
-        validators=[User.WEBSITE_VALIDATORS['twitter']],
-        widget=forms.TextInput(attrs={
-            'placeholder': 'https://twitter.com/',
-            'data-fa-icon': 'icon-twitter',
-        }),
+        validators=[User.WEBSITE_VALIDATORS["twitter"]],
+        widget=forms.TextInput(
+            attrs={
+                "placeholder": "https://twitter.com/",
+                "data-fa-icon": "icon-twitter",
+            }
+        ),
     )
     github_url = forms.CharField(
-        label=_('GitHub'),
+        label=_("GitHub"),
         required=False,
-        validators=[User.WEBSITE_VALIDATORS['github']],
-        widget=forms.TextInput(attrs={
-            'placeholder': 'https://github.com/',
-            'data-fa-icon': 'icon-github',
-        }),
+        validators=[User.WEBSITE_VALIDATORS["github"]],
+        widget=forms.TextInput(
+            attrs={"placeholder": "https://github.com/", "data-fa-icon": "icon-github"}
+        ),
+    )
+    is_github_url_public = forms.BooleanField(
+        label=_("Display a link to GitHub on my profile"), required=False
     )
     stackoverflow_url = forms.CharField(
-        label=_('Stack Overflow'),
+        label=_("Stack Overflow"),
         required=False,
-        validators=[User.WEBSITE_VALIDATORS['stackoverflow']],
-        widget=forms.TextInput(attrs={
-            'placeholder': 'https://stackoverflow.com/users/',
-            'data-fa-icon': 'icon-stackexchange',
-        }),
+        validators=[User.WEBSITE_VALIDATORS["stackoverflow"]],
+        widget=forms.TextInput(
+            attrs={
+                "placeholder": "https://stackoverflow.com/users/",
+                "data-fa-icon": "icon-stackexchange",
+            }
+        ),
     )
     linkedin_url = forms.CharField(
-        label=_('LinkedIn'),
+        label=_("LinkedIn"),
         required=False,
-        validators=[User.WEBSITE_VALIDATORS['linkedin']],
-        widget=forms.TextInput(attrs={
-            'placeholder': 'https://www.linkedin.com/',
-            'data-fa-icon': 'icon-linkedin',
-        }),
+        validators=[User.WEBSITE_VALIDATORS["linkedin"]],
+        widget=forms.TextInput(
+            attrs={
+                "placeholder": "https://www.linkedin.com/",
+                "data-fa-icon": "icon-linkedin",
+            }
+        ),
     )
     mozillians_url = forms.CharField(
-        label=_('Mozillians'),
+        label=_("Mozillians"),
         required=False,
-        validators=[User.WEBSITE_VALIDATORS['mozillians']],
-        widget=forms.TextInput(attrs={
-            'placeholder': 'https://mozillians.org/u/',
-            'data-fa-icon': 'icon-group',
-        }),
+        validators=[User.WEBSITE_VALIDATORS["mozillians"]],
+        widget=forms.TextInput(
+            attrs={
+                "placeholder": "https://mozillians.org/u/",
+                "data-fa-icon": "icon-group",
+            }
+        ),
     )
     facebook_url = forms.CharField(
-        label=_('Facebook'),
+        label=_("Facebook"),
         required=False,
-        validators=[User.WEBSITE_VALIDATORS['facebook']],
-        widget=forms.TextInput(attrs={
-            'placeholder': 'https://www.facebook.com/',
-            'data-fa-icon': 'icon-facebook',
-        }),
+        validators=[User.WEBSITE_VALIDATORS["facebook"]],
+        widget=forms.TextInput(
+            attrs={
+                "placeholder": "https://www.facebook.com/",
+                "data-fa-icon": "icon-facebook",
+            }
+        ),
     )
+    discourse_url = forms.CharField(
+        label=_("Discourse"),
+        required=False,
+        validators=[User.WEBSITE_VALIDATORS["discourse"]],
+        widget=forms.TextInput(
+            attrs={
+                "placeholder": "https://discourse.mozilla.org/u/",
+                "data-fa-icon": "icon-discourse",
+            }
+        ),
+    )
+    is_newsletter_subscribed = forms.BooleanField(required=False)
 
     class Meta:
         model = User
-        fields = ('fullname', 'title', 'organization', 'location',
-                  'locale', 'timezone', 'bio', 'irc_nickname', 'interests',
-                  'website_url', 'twitter_url', 'github_url',
-                  'stackoverflow_url', 'linkedin_url', 'mozillians_url',
-                  'facebook_url')
+        fields = (
+            "fullname",
+            "title",
+            "organization",
+            "location",
+            "locale",
+            "timezone",
+            "irc_nickname",
+            "twitter_url",
+            "github_url",
+            "is_github_url_public",
+            "stackoverflow_url",
+            "linkedin_url",
+            "mozillians_url",
+            "facebook_url",
+            "discourse_url",
+            "username",
+            "is_newsletter_subscribed",
+        )
 
     def __init__(self, *args, **kwargs):
         super(UserEditForm, self).__init__(*args, **kwargs)
         # in case the username is not changed and the user has a legacy
         # username we want to disarm the username regex
-        if ('username' not in self.changed_data and
-                self.instance and self.instance.has_legacy_username):
-            self.fields['username'].regex = USERNAME_LEGACY_REGEX
-
-    def clean_expertise(self):
-        """Enforce expertise as a subset of interests"""
-        # bug 709938 - don't assume interests passed validation
-        interests = set(parse_tags(self.cleaned_data.get('interests', '')))
-        expertise = set(parse_tags(self.cleaned_data['expertise']))
-
-        if len(expertise) > 0 and not expertise.issubset(interests):
-            raise forms.ValidationError(_("Areas of expertise must be a "
-                                          "subset of interests"))
-
-        return self.cleaned_data['expertise']
+        if (
+            "username" not in self.changed_data
+            and self.instance
+            and self.instance.has_legacy_username
+        ):
+            self.fields["username"].regex = USERNAME_LEGACY_REGEX
 
     def clean_username(self):
-        new_username = self.cleaned_data['username']
+        new_username = self.cleaned_data["username"]
 
-        if (self.instance is not None and
-                User.objects.exclude(pk=self.instance.pk)
-                            .filter(username=new_username)
-                            .exists()):
-            raise forms.ValidationError(_('Username already in use.'))
+        if not new_username:
+            raise forms.ValidationError(_("This field cannot be blank."))
+
+        if (
+            self.instance is not None
+            and User.objects.exclude(pk=self.instance.pk)
+            .filter(username=new_username)
+            .exists()
+        ):
+            raise forms.ValidationError(_("Username already in use."))
         return new_username
+
+
+class UserRecoveryEmailForm(forms.Form):
+    """
+    Send email(s) with an account recovery link.
+
+    Modeled after django.contrib.auth.forms.PasswordResetForm
+    """
+
+    email = forms.EmailField(label=_("Email"), max_length=254)
+
+    def save(self, request):
+        """
+        Send email(s) with an account recovery link.
+        """
+        email = self.cleaned_data["email"]
+
+        # Gather matching active users
+        active_users = User.objects.filter(is_active=True)
+        # Users using email as the primary contact email
+        primary_users = active_users.filter(email__iexact=email)
+        # Users with a matching Persona account
+        personas = active_users.filter(
+            socialaccount__uid__iexact=email, socialaccount__provider="persona"
+        )
+        # Users with that confirmed email
+        confirmed = active_users.filter(emailaddress__email__iexact=email)
+
+        # Send one account recovery email to each matching user
+        user_pks = set()
+        user_pks.update(primary_users.values_list("pk", flat=True))
+        user_pks.update(personas.values_list("pk", flat=True))
+        user_pks.update(confirmed.values_list("pk", flat=True))
+        for user_pk in sorted(user_pks):
+            # TODO figure out why this isn't a .delay() call.
+            # https://bugzilla.mozilla.org/show_bug.cgi?id=1544925
+            send_recovery_email(user_pk, email, request.LANGUAGE_CODE)
+
+
+class UserDeleteForm(forms.Form):
+    def __init__(self, *args, username, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        choices = {
+            "keep": (
+                _("Keep my attribution for my page changes (%(username)s)")
+                % {"username": username}
+            ),
+            "donate": _('Switch my attribution for my page changes to "Anonymous"'),
+        }
+
+        self.fields["attributions"].choices = choices.items()
+
+    attributions = forms.ChoiceField(required=True, widget=forms.widgets.RadioSelect())

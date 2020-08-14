@@ -1,107 +1,213 @@
-from __future__ import with_statement
-
 import json
 import logging
 import os
-from datetime import datetime
+import textwrap
+from datetime import datetime, timedelta
+from glob import glob
 
+from celery import chain, chord, task
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.sitemaps import GenericSitemap
-from django.core.mail import EmailMessage, mail_admins, send_mail
-from django.db import connection, transaction
+from django.core.mail import mail_admins
+from django.db import transaction
+from django.db.models import Q
 from django.template.loader import render_to_string
 from django.utils.encoding import smart_str
-
-from celery import task, chord
-from constance import config
 from lxml import etree
 
-from kuma.core.cache import memcache
-from kuma.core.utils import chord_flow, chunked, MemcacheLock
+from kuma.attachments.models import AttachmentStorage
+from kuma.core.decorators import skip_in_maintenance_mode
+from kuma.core.urlresolvers import reverse
+from kuma.core.utils import chunked, send_mail_retrying
 from kuma.search.models import Index
+from kuma.users.models import User
 
-from .events import context_dict
-from .exceptions import PageMoveError, StaleDocumentsRenderingInProgress
-from .helpers import absolutify
-from .models import Document, Revision, RevisionIP
+from .constants import (
+    EXPERIMENT_TITLE_PREFIX,
+    LEGACY_MINDTOUCH_NAMESPACES,
+    NOINDEX_SLUG_PREFIXES,
+)
+from .events import first_edit_email
+from .exceptions import PageMoveError
+from .models import (
+    Document,
+    DocumentDeletionLog,
+    DocumentRenderingInProgress,
+    DocumentSpamAttempt,
+    Revision,
+    RevisionIP,
+)
 from .search import WikiDocumentType
+from .templatetags.jinja_helpers import absolutify
 from .utils import tidy_content
 
 
-log = logging.getLogger('kuma.wiki.tasks')
-render_lock = MemcacheLock('render-stale-documents-lock', expires=60 * 60)
+log = logging.getLogger("kuma.wiki.tasks")
 
 
-@task(rate_limit='60/m')
-def render_document(pk, cache_control, base_url, force=False):
+class SitemapStorage:
+    @staticmethod
+    def joinpaths(path, *paths, makedirs=False):
+        if settings.SITEMAP_USE_S3:
+            return os.path.join(path, *paths)
+        result = os.path.join(settings.MEDIA_ROOT, path, *paths)
+        if makedirs:
+            os.makedirs(result, exist_ok=True)
+        return result
+
+    def __init__(self):
+        self.__s3_storage = None
+
+    @property
+    def s3_storage(self):
+        # Lazily create the S3 storage instance.
+        if not self.__s3_storage and settings.SITEMAP_USE_S3:
+            self.__s3_storage = AttachmentStorage(
+                object_parameters={
+                    "CacheControl": "public, max-age=3600",
+                    "ContentType": "application/xml; charset=utf-8",
+                }
+            )
+        return self.__s3_storage
+
+    def open(self, path, mode="r"):
+        if settings.SITEMAP_USE_S3:
+            return self.s3_storage.open(path, mode)
+        return open(path, mode)
+
+    def exists(self, path):
+        if settings.SITEMAP_USE_S3:
+            return self.s3_storage.exists(path)
+        return os.path.exists(path)
+
+    def s3_clear(self):
+        # Convenience function for clean-up of the test S3 bucket. There is
+        # no need for a filesystem equivalent since you should be using
+        # the "tmpdir" fixture for that within tests.
+        if settings.SITEMAP_USE_S3 and (self.s3_storage.bucket.name == "test"):
+            self.s3_storage.bucket.objects.delete()
+
+    def get_all(self):
+        # Convenience function for use in tests that returns a list of all
+        # filenames with an ".xml" extension within the S3 bucket or under
+        # settings.MEDIA_ROOT on the filesystem.
+        if settings.SITEMAP_USE_S3:
+            return [
+                obj.key
+                for obj in self.s3_storage.bucket.objects.all()
+                if obj.key.endswith(".xml")
+            ]
+        return glob(os.path.join(settings.MEDIA_ROOT, "**/*.xml"), recursive=True)
+
+
+sitemap_storage = SitemapStorage()
+
+
+@task(rate_limit="60/m")
+@skip_in_maintenance_mode
+def render_document(
+    pk, cache_control, base_url, force=False, invalidate_cdn_cache=True
+):
     """Simple task wrapper for the render() method of the Document model"""
     document = Document.objects.get(pk=pk)
     if force:
         document.render_started_at = None
 
     try:
-        document.render(cache_control, base_url)
+        document.render(
+            cache_control, base_url, invalidate_cdn_cache=invalidate_cdn_cache
+        )
+    except DocumentRenderingInProgress:
+        pass
     except Exception as e:
-        subject = 'Exception while rendering document %s' % document.pk
-        mail_admins(subject=subject, message=e)
+        subject = "Exception while rendering document %s" % document.pk
+        mail_admins(subject=subject, message=str(e))
     return document.rendered_errors
 
 
 @task
-def email_render_document_progress(percent_complete, total):
+@skip_in_maintenance_mode
+def email_document_progress(command_name, percent_complete, total):
     """
-    Task to send email for render_document progress notification.
+    Task to send email for progress notification.
     """
-    subject = ('The command `render_document` is %s%% complete' %
-               percent_complete)
-    message = (
-        'The command `render_document` is %s%% complete out of a total of '
-        '%s documents to render.' % (percent_complete, total))
+    subject = "The command `{}` is {}% complete".format(command_name, percent_complete)
+    message = "{} out of a total of {} documents.".format(subject, total)
     mail_admins(subject=subject, message=message)
 
 
 @task
-def render_document_chunk(pks, cache_control='no-cache', base_url=None,
-                          force=False):
+@skip_in_maintenance_mode
+def render_document_chunk(
+    pks,
+    cache_control="no-cache",
+    base_url=None,
+    force=False,
+    invalidate_cdn_cache=False,
+):
     """
     Simple task to render a chunk of documents instead of one per each
     """
     logger = render_document_chunk.get_logger()
-    logger.info(u'Starting to render document chunk: %s' %
-                ','.join([str(pk) for pk in pks]))
+    logger.info(
+        "Starting to render document chunk: %s" % ",".join([str(pk) for pk in pks])
+    )
     base_url = base_url or settings.SITE_URL
     for pk in pks:
         # calling the task without delay here since we want to localize
         # the processing of the chunk in one process
-        result = render_document(pk, cache_control, base_url, force=force)
+        result = render_document(
+            pk,
+            cache_control,
+            base_url,
+            force=force,
+            invalidate_cdn_cache=invalidate_cdn_cache,
+        )
         if result:
-            logger.error(u'Error while rendering document %s with error: %s' %
-                         (pk, result))
-    logger.info(u'Finished rendering of document chunk')
-
-
-@task(throws=(StaleDocumentsRenderingInProgress,))
-def acquire_render_lock():
-    """
-    A task to acquire the render document lock
-    """
-    if render_lock.locked():
-        # fail loudly if this is running already
-        # may indicate a problem with the schedule of this task
-        raise StaleDocumentsRenderingInProgress
-    render_lock.acquire()
+            logger.error(
+                "Error while rendering document %s with error: %s" % (pk, result)
+            )
+    logger.info("Finished rendering of document chunk")
 
 
 @task
-def release_render_lock():
+@skip_in_maintenance_mode
+def clean_document_chunk(doc_pks, user_pk):
     """
-    A task to release the render document lock
+    Simple task to clean a chunk of documents.
     """
-    render_lock.release()
+    logger = clean_document_chunk.get_logger()
+    logger.info(
+        "Starting to clean document chunk: {}".format(
+            ",".join(str(pk) for pk in doc_pks)
+        )
+    )
+    user = User.objects.get(pk=user_pk)
+    num_cleaned = 0
+    for pk in doc_pks:
+        try:
+            doc = Document.objects.get(pk=pk)
+            logger.info("   Cleaning {!r}".format(doc))
+            rev = doc.clean_current_revision(user)
+        except Exception as e:
+            logger.info("   ...mailing error to admins")
+            subject = "Error while cleaning document {}".format(pk)
+            mail_admins(subject=subject, message=str(e))
+        else:
+            if rev is None:
+                logger.info("   ...skipped (it's already clean)")
+            else:
+                num_cleaned += 1
+                logger.info("   ...created {!r}".format(rev))
+    logger.info(
+        "Finished cleaning document chunk ({} of {} "
+        "required cleaning)".format(num_cleaned, len(doc_pks))
+    )
 
 
 @task
+@skip_in_maintenance_mode
 def render_stale_documents(log=None):
     """Simple task wrapper for rendering stale documents"""
     stale_docs = Document.objects.get_by_stale_rendering().distinct()
@@ -114,18 +220,15 @@ def render_stale_documents(log=None):
         # fetch a logger in case none is given
         log = render_stale_documents.get_logger()
 
-    log.info('Found %s stale documents' % stale_docs_count)
-    stale_pks = stale_docs.values_list('pk', flat=True)
+    log.info("Found %s stale documents" % stale_docs_count)
+    stale_pks = stale_docs.values_list("pk", flat=True)
 
-    pre_task = acquire_render_lock.si()
-    render_tasks = [render_document_chunk.si(pks)
-                    for pks in chunked(stale_pks, 5)]
-    post_task = release_render_lock.si()
-
-    chord_flow(pre_task, render_tasks, post_task).apply_async()
+    render_tasks = [render_document_chunk.si(pks) for pks in chunked(stale_pks, 5)]
+    chain(*render_tasks).apply_async()
 
 
 @task
+@skip_in_maintenance_mode
 def build_json_data_for_document(pk, stale):
     """Force-refresh cached JSON data after rendering."""
     document = Document.objects.get(pk=pk)
@@ -139,63 +242,88 @@ def build_json_data_for_document(pk, stale):
 
 
 @task
-def move_page(locale, slug, new_slug, email):
+@skip_in_maintenance_mode
+def move_page(locale, slug, new_slug, user_id):
     transaction.set_autocommit(False)
     User = get_user_model()
     try:
-        user = User.objects.get(email=email)
+        user = User.objects.get(id=user_id)
     except User.DoesNotExist:
         transaction.rollback()
-        logging.error('Page move failed: no user with email address %s' %
-                      email)
+        logging.error("Page move failed: no user with id %s" % user_id)
         return
+
     try:
         doc = Document.objects.get(locale=locale, slug=slug)
     except Document.DoesNotExist:
         transaction.rollback()
         message = """
-    Page move failed.
+            Page move failed.
 
-    Move was requested for document with slug %(slug)s in locale
-    %(locale)s, but no such document exists.
-    """ % {'slug': slug, 'locale': locale}
+            Move was requested for document with slug %(slug)s in locale
+            %(locale)s, but no such document exists.
+        """ % {
+            "slug": slug,
+            "locale": locale,
+        }
         logging.error(message)
-        send_mail('Page move failed', message, settings.DEFAULT_FROM_EMAIL,
-                  [user.email])
+        send_mail_retrying(
+            "Page move failed",
+            textwrap.dedent(message),
+            settings.DEFAULT_FROM_EMAIL,
+            [user.email],
+        )
         transaction.set_autocommit(True)
         return
+
     try:
         doc._move_tree(new_slug, user=user)
     except PageMoveError as e:
         transaction.rollback()
         message = """
-    Page move failed.
+            Page move failed.
 
-    Move was requested for document with slug %(slug)s in locale
-    %(locale)s, but could not be completed.
+            Move was requested for document with slug %(slug)s in locale
+            %(locale)s, but could not be completed.
 
-    Diagnostic info:
+            Diagnostic info:
 
-    %(message)s
-    """ % {'slug': slug, 'locale': locale, 'message': e.message}
+            %(message)s
+        """ % {
+            "slug": slug,
+            "locale": locale,
+            "message": e.message,
+        }
         logging.error(message)
-        send_mail('Page move failed', message, settings.DEFAULT_FROM_EMAIL,
-                  [user.email])
+        send_mail_retrying(
+            "Page move failed",
+            textwrap.dedent(message),
+            settings.DEFAULT_FROM_EMAIL,
+            [user.email],
+        )
         transaction.set_autocommit(True)
         return
     except Exception as e:
         transaction.rollback()
         message = """
-    Page move failed.
+            Page move failed.
 
-    Move was requested for document with slug %(slug)s in locale %(locale)s,
-    but could not be completed.
+            Move was requested for document with slug %(slug)s in locale %(locale)s,
+            but could not be completed.
 
-    %(info)s
-    """ % {'slug': slug, 'locale': locale, 'info': e}
+            %(info)s
+        """ % {
+            "slug": slug,
+            "locale": locale,
+            "info": e,
+        }
         logging.error(message)
-        send_mail('Page move failed', message, settings.DEFAULT_FROM_EMAIL,
-                  [user.email])
+        send_mail_retrying(
+            "Page move failed",
+            textwrap.dedent(message),
+            settings.DEFAULT_FROM_EMAIL,
+            [user.email],
+        )
         transaction.set_autocommit(True)
         return
 
@@ -204,94 +332,70 @@ def move_page(locale, slug, new_slug, email):
 
     # Now that we know the move succeeded, re-render the whole tree.
     for moved_doc in [doc] + doc.get_descendants():
-        moved_doc.schedule_rendering('max-age=0')
+        moved_doc.schedule_rendering("max-age=0")
 
-    subject = 'Page move completed: ' + slug + ' (' + locale + ')'
-    full_url = settings.SITE_URL + '/' + locale + '/docs/' + new_slug
-    message = """
-Page move completed.
+    subject = "Page move completed: " + slug + " (" + locale + ")"
 
-The move requested for the document with slug %(slug)s in locale
-%(locale)s, and all its children, has been completed.
+    full_url = settings.SITE_URL + "/" + locale + "/docs/" + new_slug
 
-You can now view this document at its new location: %(full_url)s.
-    """ % {'slug': slug, 'locale': locale, 'full_url': full_url}
-    send_mail(subject, message, settings.DEFAULT_FROM_EMAIL,
-              [user.email])
+    # Get the parent document, if parent doc is None, it means its the parent document
+    parent_doc = doc.parent or doc
 
+    other_locale_urls = [
+        settings.SITE_URL + translation.get_absolute_url()
+        for translation in parent_doc.translations.exclude(locale=doc.locale).order_by(
+            "locale"
+        )
+    ]
 
-@task
-def update_community_stats():
-    cursor = connection.cursor()
-    try:
-        cursor.execute("""
-            SELECT count(creator_id)
-            FROM
-              (SELECT DISTINCT creator_id
-               FROM wiki_revision
-               WHERE created >= DATE_SUB(NOW(), INTERVAL 1 YEAR)) AS contributors
-            """)
-        contributors = cursor.fetchone()
+    # If the document is a translation we should include the parent document url to the list
+    if doc.parent:
+        other_locale_urls = [
+            settings.SITE_URL + doc.parent.get_absolute_url()
+        ] + other_locale_urls
 
-        cursor.execute("""
-            SELECT count(locale)
-            FROM
-              (SELECT DISTINCT wd.locale
-               FROM wiki_document wd,
-                                  wiki_revision wr
-               WHERE wd.id = wr.document_id
-                 AND wr.created >= DATE_SUB(NOW(), INTERVAL 1 YEAR)) AS locales
-            """)
-        locales = cursor.fetchone()
-    finally:
-        cursor.close()
+    message = (
+        textwrap.dedent(
+            """
+        Page move completed.
 
-    community_stats = {}
+        The move requested for the document with slug %(slug)s in locale
+        %(locale)s, and all its children, has been completed.
 
-    try:
-        community_stats['contributors'] = contributors[0]
-        community_stats['locales'] = locales[0]
-    except IndexError:
-        community_stats = None
+        The following localized articles may need to be moved also:
+        %(locale_urls)s
 
-    # storing a None value in cache allows a better check for
-    # emptiness in the view
-    if 0 in community_stats.values():
-        community_stats = None
+        You can now view this document at its new location: %(full_url)s.
+    """
+        )
+        % {
+            "slug": slug,
+            "locale": locale,
+            "full_url": full_url,
+            "locale_urls": "\n".join(other_locale_urls),
+        }
+    )
 
-    memcache.set('community_stats', community_stats, 86400)
+    send_mail_retrying(subject, message, settings.DEFAULT_FROM_EMAIL, [user.email])
 
 
 @task
+@skip_in_maintenance_mode
 def delete_old_revision_ips(days=30):
     RevisionIP.objects.delete_old(days=days)
 
 
 @task
+@skip_in_maintenance_mode
 def send_first_edit_email(revision_pk):
     """ Make an 'edited' notification email for first-time editors """
     revision = Revision.objects.get(pk=revision_pk)
-    user, doc = revision.creator, revision.document
-    subject = (u"[MDN] %(user)s made their first edit, to: %(doc)s" %
-               {'user': user.username, 'doc': doc.title})
-    message = render_to_string('wiki/email/edited.ltxt',
-                               context_dict(revision))
-    doc_url = absolutify(doc.get_absolute_url())
-    email = EmailMessage(subject, message, settings.DEFAULT_FROM_EMAIL,
-                         to=[config.EMAIL_LIST_FOR_FIRST_EDITS],
-                         headers={'X-Kuma-Document-Url': doc_url,
-                                  'X-Kuma-Editor-Username': user.username})
-    email.send()
+    first_edit_email(revision).send()
 
 
-class WikiSitemap(GenericSitemap):
-    protocol = 'https'
-    priority = 0.5
-
-
-SITEMAP_START = u'<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
-SITEMAP_ELEMENT = u'<sitemap><loc>%s</loc><lastmod>%s</lastmod></sitemap>'
-SITEMAP_END = u'</sitemapindex>'
+SITEMAP_START = '<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+SITEMAP_ELEMENT = "<sitemap><loc>%s</loc><lastmod>%s</lastmod></sitemap>"
+SITEMAP_END = "</sitemapindex>"
 
 
 @task
@@ -302,35 +406,80 @@ def build_locale_sitemap(locale):
     build.
     """
     now = datetime.utcnow()
-    timestamp = '%s+00:00' % now.replace(microsecond=0).isoformat()
+    timestamp = "%s+00:00" % now.replace(microsecond=0).isoformat()
 
-    directory = os.path.join(settings.MEDIA_ROOT, 'sitemaps', locale)
-    if not os.path.isdir(directory):
-        os.makedirs(directory)
+    directory = sitemap_storage.joinpaths("sitemaps", locale, makedirs=True)
 
-    queryset = Document.objects.filter_for_list(locale=locale)
-    if queryset.exists():
-        names = []
-        info = {
-            'queryset': queryset,
-            'date_field': 'modified',
+    # Add any non-document URL's, which will always include the home page.
+    other_urls = [
+        {
+            "location": absolutify(reverse("home", locale=locale)),
+            "lastmod": None,
+            "changefreq": None,
+            "priority": None,
         }
-        sitemap = WikiSitemap(info)
-        for page in range(1, sitemap.paginator.num_pages + 1):
-            urls = sitemap.get_urls(page=page)
-            if page == 1:
-                name = 'sitemap.xml'
-            else:
-                name = 'sitemap_%s.xml' % page
-            names.append(name)
+    ]
+    make = [("sitemap_other.xml", other_urls)]
 
-            rendered = smart_str(render_to_string('wiki/sitemap.xml',
-                                                  {'urls': urls}))
-            path = os.path.join(directory, name)
-            with open(path, 'w') as sitemap_file:
-                sitemap_file.write(rendered)
+    # We *could* use the `Document.objects.filter_for_list()` manager
+    # but it has a list of `.only()` columns which isn't right,
+    # it has a list of hardcoded slug prefixes, and it forces an order by
+    # on 'slug' which is slow and not needed in this context.
+    queryset = Document.objects.filter(locale=locale, is_redirect=False,).exclude(
+        html=""
+    )
+    # Be explicit about exactly only the columns we need.
+    queryset = queryset.only("id", "locale", "slug", "modified")
 
-        return locale, names, timestamp
+    # The logic for rendering a page will do various checks on each
+    # document to evaluate if it should be excluded from robots.
+    # Ie. in a jinja template it does...
+    #  `{% if reasons... %}noindex, nofollow{% endif %}`
+    # Some of those evaluations are complex and depend on the request.
+    # That's too complex here but we can at least do some low-hanging
+    # fruit filtering.
+    queryset = queryset.exclude(current_revision__isnull=True,)
+    q = Q(slug__startswith=EXPERIMENT_TITLE_PREFIX)
+    for legacy_mindtouch_namespace in LEGACY_MINDTOUCH_NAMESPACES:
+        q |= Q(slug__startswith="{}:".format(legacy_mindtouch_namespace))
+    for slug_start in NOINDEX_SLUG_PREFIXES:
+        q |= Q(slug__startswith=slug_start)
+    queryset = queryset.exclude(q)
+
+    # We have to make the queryset ordered. Otherwise the GenericSitemap
+    # generator might throw this perfectly valid warning:
+    #
+    #    UnorderedObjectListWarning:
+    #     Pagination may yield inconsistent results with an unordered
+    #     object_list: <class 'kuma.wiki.models.Document'> QuerySet.
+    #
+    # Any order is fine. Use something definitely indexed. It's needed for
+    # paginator used by GenericSitemap.
+    queryset = queryset.order_by("id")
+
+    # To avoid an extra query to see if the queryset is empty, let's just
+    # start iterator and create the sitemap on the first found page.
+    # Note, how we check if 'urls' became truthy before adding it.
+    sitemap = GenericSitemap(
+        {"queryset": queryset, "date_field": "modified"}, protocol="https", priority=0.5
+    )
+    for page in range(1, sitemap.paginator.num_pages + 1):
+        urls = sitemap.get_urls(page=page)
+        if page == 1:
+            name = "sitemap.xml"
+        else:
+            name = "sitemap_%s.xml" % page
+        if urls:
+            make.append((name, urls))
+
+    # Make the sitemap files.
+    for name, urls in make:
+        rendered = smart_str(render_to_string("wiki/sitemap.xml", {"urls": urls}))
+        path = os.path.join(directory, name)
+        with sitemap_storage.open(path, "w") as sitemap_file:
+            sitemap_file.write(rendered)
+
+    return locale, [name for name, _ in make], timestamp
 
 
 @task
@@ -346,32 +495,33 @@ def build_index_sitemap(results):
         if result is not None:
             locale, names, timestamp = result
             for name in names:
-                sitemap_url = absolutify('/sitemaps/%s/%s' % (locale, name))
+                sitemap_url = absolutify("/sitemaps/%s/%s" % (locale, name))
                 sitemap_parts.append(SITEMAP_ELEMENT % (sitemap_url, timestamp))
 
     sitemap_parts.append(SITEMAP_END)
 
-    index_path = os.path.join(settings.MEDIA_ROOT, 'sitemap.xml')
+    index_path = sitemap_storage.joinpaths("sitemap.xml")
     sitemap_tree = etree.fromstringlist(sitemap_parts)
-    with open(index_path, 'w') as index_file:
-        sitemap_tree.getroottree().write(index_file,
-                                         encoding='utf-8',
-                                         pretty_print=True)
+    with sitemap_storage.open(index_path, "wb") as index_file:
+        sitemap_tree.getroottree().write(
+            index_file, encoding="utf-8", pretty_print=True
+        )
 
 
 @task
 def build_sitemaps():
     """
     Build and save sitemap files for every MDN language and as a
-    callback save the sitempa index file as well.
+    callback save the sitemap index file as well.
     """
-    tasks = [build_locale_sitemap.si(locale)
-             for locale in settings.MDN_LANGUAGES]
+    tasks = [build_locale_sitemap.si(lang[0]) for lang in settings.LANGUAGES]
     post_task = build_index_sitemap.s()
-    chord(header=tasks, body=post_task).apply_async()
+    # we retry the chord unlock 300 times, so 5 mins with an interval of 1s
+    chord(header=tasks, body=post_task).apply_async(max_retries=300, interval=1)
 
 
 @task
+@skip_in_maintenance_mode
 def index_documents(ids, index_pk, reraise=False):
     """
     Index a list of documents into the provided index.
@@ -391,25 +541,25 @@ def index_documents(ids, index_pk, reraise=False):
     from kuma.wiki.models import Document
 
     cls = WikiDocumentType
-    es = cls.get_connection('indexing')
+    es = cls.get_connection("indexing")
     index = Index.objects.get(pk=index_pk)
 
     objects = Document.objects.filter(id__in=ids)
     documents = []
-    for obj in objects:
+    for obj in objects.select_related("parent").prefetch_related("tags"):
         try:
             documents.append(cls.from_django(obj))
         except Exception:
-            log.exception('Unable to extract/index document (id: %d)', obj.id)
+            log.exception("Unable to extract/index document (id: %d)", obj.id)
             if reraise:
                 raise
 
     if documents:
-        cls.bulk_index(documents, id_field='id', es=es,
-                       index=index.prefixed_name)
+        cls.bulk_index(documents, id_field="id", es=es, index=index.prefixed_name)
 
 
 @task
+@skip_in_maintenance_mode
 def unindex_documents(ids, index_pk):
     """
     Delete a list of documents from the provided index.
@@ -418,23 +568,59 @@ def unindex_documents(ids, index_pk):
     :arg index_pk: The `Index` pk of the index to remove items from.
     """
     cls = WikiDocumentType
-    es = cls.get_connection('indexing')
+    es = cls.get_connection("indexing")
     index = Index.objects.get(pk=index_pk)
 
     cls.bulk_delete(ids, es=es, index=index.prefixed_name)
 
 
-@task(rate_limit='120/m')
-def tidy_revision_content(pk):
+@task(rate_limit="120/m")
+@skip_in_maintenance_mode
+def tidy_revision_content(pk, refresh=True):
     """
     Run tidy over the given revision's content and save it to the
     tidy_content field if the content is not equal to the current value.
 
     :arg pk: Primary key of `Revision` whose content needs tidying.
     """
-    revision = Revision.objects.get(pk=pk)
-    tidied_content, errors = tidy_content(revision.content)
-    if tidied_content != revision.tidied_content:
-        Revision.objects.filter(pk=pk).update(tidied_content=tidied_content)
-    # return the errors so we can look them up in the Celery task result store
-    return errors
+    try:
+        revision = Revision.objects.get(pk=pk)
+    except Revision.DoesNotExist as exc:
+        # Retry in 2 minutes
+        log.error("Tidy was unable to get revision id: %d. Retrying.", pk)
+        tidy_revision_content.retry(countdown=60 * 2, max_retries=5, exc=exc)
+    else:
+        if revision.tidied_content and not refresh:
+            return
+        tidied_content, errors = tidy_content(revision.content)
+        if tidied_content != revision.tidied_content:
+            Revision.objects.filter(pk=pk).update(tidied_content=tidied_content)
+        # return the errors so we can look them up in the Celery task result
+        return errors
+
+
+@task
+@skip_in_maintenance_mode
+def delete_old_documentspamattempt_data(days=30):
+    """Delete old DocumentSpamAttempt.data, which contains PII.
+
+    Also set review to REVIEW_UNAVAILABLE.
+    """
+    older = datetime.now() - timedelta(days=30)
+    dsas = DocumentSpamAttempt.objects.filter(created__lt=older).exclude(
+        data__isnull=True
+    )
+    dsas_reviewed = dsas.exclude(review=DocumentSpamAttempt.NEEDS_REVIEW)
+    dsas_unreviewed = dsas.filter(review=DocumentSpamAttempt.NEEDS_REVIEW)
+    dsas_reviewed.update(data=None)
+    dsas_unreviewed.update(data=None, review=DocumentSpamAttempt.REVIEW_UNAVAILABLE)
+
+
+@task
+@skip_in_maintenance_mode
+def delete_logs_for_purged_documents():
+    """Delete DocumentDeletionLogs for purged documents."""
+    for ddl in DocumentDeletionLog.objects.all():
+        doc = Document.admin_objects.filter(locale=ddl.locale, slug=ddl.slug)
+        if not doc.exists():
+            ddl.delete()
